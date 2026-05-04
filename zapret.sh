@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 专业版管理面板 v3（生产级）
-# 作者：Copilot 为 Joshua 定制
+# Zapret2 专业版管理面板
+# 作者：catmi
 # 路径：/root/catmi/Zapret2
 #
 # 特点：
