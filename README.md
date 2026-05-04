@@ -1,377 +1,122 @@
 
----
-
-# 📘 Zapret2 Panel v3（生产级）  
-一个可在生产环境长期运行的 **DPI 绕过管理面板**，支持 IPv4/IPv6、iptables/nftables、多队列、节点独立策略、自动规则加载等。
 
 ---
 
-## ✨ 功能特性
+# 🟩 **Zapret2 Panel v5.1 — GitHub Release 文案（专业版）**
 
-- **IPv4 + IPv6 全支持**
-- **iptables / ip6tables / nftables 自动识别**
-- **local / gateway 模式切换**
-- **多队列 queue-balance（多核分摊）**
-- **全局 DPI 策略（Minimal / Stable / Aggressive）**
-- **节点独立策略（Profile）**
-- **动态参数加载（无需重写 systemd）**
-- **NFQUEUE 规则随服务自动加载/卸载**
-- **systemd 安全沙箱**
-- **blockcheck2 环境隔离**
-- **小白友好菜单**
-- **卸载干净，不留规则**
+## 🚀 Zapret2 Panel v5.1（Production Hardened Release）
 
-适用于：
-
-- VPS  
-- 家庭旁路由  
-- 网关透明代理  
-- Cloudflare Argo  
-- VLESS / Trojan / Hysteria / Reality  
-- gost / sing-box / mihomo  
-- 任何需要 DPI 绕过的代理流量  
+v5.1 是 Zapret2 Panel 的“生产稳定版”，专为复杂网络环境、双栈 IPv4/IPv6、iptables-nft 混合系统、运营商强 DPI 干扰等场景设计。本版本在 v5 的基础上进行了深度修复与强化，确保在长期运行、极端网络、透明网关、旁路由等环境中保持稳定可靠。
 
 ---
 
-# 🚀 安装
+## 🔧 **本次更新重点（v5 → v5.1）**
 
-```bash
-chmod +x zapret2_panel.sh
-./zapret2_panel.sh
-```
+### **1. 完整修复策略参数切割问题**
+- 旧版本使用 `for token in $line` 会导致带空格/引号的策略被拆分  
+- v5.1 改为 **整行作为一个参数**  
+- 彻底避免 nfqws2 因策略格式导致的静默崩溃
 
-首次运行选择：
+### **2. 修正 nftables 规则语法**
+- 移除冗余的 `ip protocol tcp tcp dport` 写法  
+- 改为标准 `meta l4proto tcp tcp dport { ... }`  
+- 兼容旧版/严格模式 nft
 
-```
-1) 安装 Zapret2（自动）
-```
+### **3. table/chain 存在性检查**
+- 避免重复创建导致的报错  
+- 支持多次 reload / restart  
+- 更适合 systemd 长期运行
 
-脚本会自动：
+### **4. 多 IP 遍历增强**
+- 遍历所有网卡的 global IPv4/IPv6  
+- 自动过滤空元素  
+- 自动加入安全白名单  
+- 适配多网卡、多 IP、IPv6 SLAAC、PD 环境
 
-- 安装依赖  
-- 下载并编译 Zapret2  
-- 初始化配置  
-- 创建 systemd 服务  
-- 自动加载 NFQUEUE 规则  
-- 启动服务  
+### **5. 自动检测 iptables-legacy / iptables-nft**
+- 避免 nft 与 iptables-nft 混合污染  
+- 自动选择最安全的后端  
+- 兼容 OpenVZ / LXC / 老内核
 
----
+### **6. nfqws2 强杀逻辑优化**
+- 增加冷却期  
+- 避免队列占用残留  
+- 防止“服务在跑但不生效”
 
-# 🧩 使用指南
+### **7. IPv6 CIDR 清洗增强**
+- 更严格的 IPv6 正则  
+- 支持 IPv6/CIDR 节点  
+- 防止畸形输入导致崩溃
 
-运行：
-
-```bash
-./zapret2_panel.sh
-```
-
-你会看到主菜单：
-
-```
-1) 安装 Zapret2（自动）
-2) 启动 Zapret2
-3) 停止 Zapret2
-4) 重启 Zapret2
-5) 查看实时日志
-6) 配置 NFQUEUE 端口（IPv4/IPv6）
-7) 配置包处理数量
-8) 配置全局 DPI 策略
-9) 节点 DPI 绕过管理（Profile）
-10) 切换模式（local / gateway）
-11) 运行 blockcheck2（隔离环境）
-12) 卸载 Zapret2（干净删除）
-0) 退出
-```
+### **8. 更详细的日志与错误捕获**
+- `/var/log/nfqws2.log`  
+- 启动参数完整打印  
+- 方便调试与问题定位
 
 ---
 
-# 🔧 模式说明（local / gateway）
+## 🧩 **核心能力（继承自 v5）**
 
-| 模式 | 说明 | 适用场景 |
-|------|------|----------|
-| **local** | 只处理本机出站流量（OUTPUT） | VPS、普通服务器 |
-| **gateway** | 处理经过服务器的所有流量（PREROUTING + FORWARD） | 旁路由、网关、透明代理 |
-
-切换方式：
-
-```
-10) 切换模式（local / gateway）
-```
+- 焦土级防火墙清理（iptables/ip6tables/nftables 全清）  
+- 完整 IPv6 捕获（OUTPUT / PREROUTING / FORWARD）  
+- DNS 劫持防护（53 TCP/UDP 直通）  
+- Host/IP 列表自动清洗与合并  
+- systemd 防重启风暴  
+- 自动适配 local/gateway 模式  
+- 支持 Argo / TUIC / HY2 / VLESS / Trojan / WS / H2  
+- 适配透明代理、旁路由、VPS 全场景  
 
 ---
 
-# 🔥 NFQUEUE 端口配置（IPv4/IPv6）
+## 📦 **适用场景**
 
-进入：
-
-```
-6) 配置 NFQUEUE 端口（IPv4/IPv6）
-```
-
-你可以设置：
-
-```
-TCP4_PORTS="443,8443"
-UDP4_PORTS="443"
-TCP6_PORTS="443"
-UDP6_PORTS=""
-```
-
-修改后会自动应用规则。
+- 运营商强 DPI 干扰  
+- Cloudflare Argo 被重置/限速  
+- TUIC/HY2 纯 IP 节点被阻断  
+- IPv6 环境下的透明代理  
+- iptables-nft 混合系统  
+- 多网卡、多 IP、双栈环境  
+- 家庭旁路由 / 网关模式  
 
 ---
 
-# 🧠 全局 DPI 策略
+## 🏁 **总结**
 
-进入：
-
-```
-8) 配置全局 DPI 策略
-```
-
-提供三种预设：
-
-- Minimal（最稳）
-- Stable（推荐）
-- Aggressive（最强）
-
-也可以自定义：
-
-```
---lua-desync=fake:blob=fake_default_tls:fooling=md5sig
---lua-desync=multisplit:pos=2
-```
+v5.1 是 Zapret2 Panel 迄今为止最稳定、最兼容、最安全的版本。  
+适合长期运行在生产环境中，尤其是复杂网络与强 DPI 干扰场景。
 
 ---
 
-# 🧩 节点独立 DPI 策略（Profile）
+# 🟦 **Zapret2 Panel v5.1 — GitHub Release 文案（小白版）**
 
-进入：
+## 🚀 Zapret2 Panel v5.1（更稳、更强、更省心）
 
-```
-9) 节点 DPI 绕过管理（Profile）
-```
-
-你可以：
-
-- 启用某个节点的 DPI 绕过  
-- 查看节点策略  
-- 删除节点策略  
-
-每个节点会生成独立目录：
-
-```
-/root/catmi/Zapret2/config/profiles/<节点名>/
-  ├── strategy.conf
-  └── hostlist.txt
-```
-
-Zapret2 会自动加载所有 profile。
+这是 Zapret2 Panel 的最新稳定版，专门为 **普通 VPS 用户、家庭旁路由、透明代理** 打造。  
+你不需要懂防火墙、不需要懂 nftables、不需要懂 DPI，只需要运行脚本即可。
 
 ---
 
-# 📡 实时日志
+## 🌟 **这次更新有什么变化？**
 
-```
-5) 查看实时日志
-```
+### ✔ 不会再因为策略写错导致服务启动失败  
+策略现在是“整行读取”，不会被拆坏。
 
-用于调试 DPI 绕过是否生效。
+### ✔ 防火墙规则更稳了  
+修复了 nft 规则语法问题，兼容更多系统。
 
----
+### ✔ 自动检测系统环境  
+自动判断你是 iptables、iptables-nft 还是 nft，不会冲突。
 
-# 🧪 blockcheck2（隔离环境）
+### ✔ 自动清理旧规则  
+每次启动都会清理旧规则，避免“服务在跑但不生效”。
 
-```
-11) 运行 blockcheck2（隔离环境）
-```
+### ✔ 自动识别你的 IPv4/IPv6  
+所有本机 IP 自动加入白名单，不会误伤。
 
-脚本会：
-
-- 暂时清理 NFQUEUE 规则  
-- 运行 blockcheck2  
-- 自动恢复规则  
-
-不会污染现有防火墙。
+### ✔ 日志更清晰  
+如果出问题，你可以在 `/var/log/nfqws2.log` 看到详细信息。
 
 ---
 
-# 🧹 卸载（干净删除）
 
-```
-12) 卸载 Zapret2（干净删除）
-```
-
-会删除：
-
-- systemd 服务  
-- 所有 NFQUEUE 规则  
-- Zapret2 目录  
-- 配置文件  
-
-不会影响其他服务。
-
----
-
-# 🟦 示例：如何让 mihomo（sing-box）里的 VLESS 节点走 DPI 绕过？
-
-假设你 VPS 上运行 mihomo，其中一个 VLESS 节点的域名是：
-
-```
-argo
-```
-
-你想让它走 Zapret2 DPI 绕过，只需要两步。
-
----
-
-## ✔ 第一步：进入节点管理菜单
-
-运行：
-
-```bash
-./zapret2_panel.sh
-```
-
-选择：
-
-```
-9) 节点 DPI 绕过管理（Profile）
-```
-
----
-
-## ✔ 第二步：启用节点 DPI 绕过
-
-选择：
-
-```
-1) 启用节点 DPI 绕过
-```
-
-脚本会问：
-
-```
-节点名称：
-```
-
-你可以随便写，例如：
-
-```
-mihomo-argo
-```
-
-然后：
-
-```
-节点域名（如 cf.example.com）：
-```
-
-你填：
-
-```
-argo
-```
-
-再选择策略：
-
-```
-1) Minimal
-2) Stable
-3) Aggressive
-```
-
-推荐：
-
-```
-2) Stable
-```
-
-脚本会自动生成：
-
-```
-/root/catmi/Zapret2/config/profiles/mihomo-argo/strategy.conf
-/root/catmi/Zapret2/config/profiles/mihomo-argo/hostlist.txt
-```
-
-并自动重启 Zapret2。
-
----
-
-# 🎉 完成！
-
-你的 mihomo VLESS 节点 **argo** 已经成功启用 DPI 绕过。
-
-无需修改 mihomo 配置  
-无需修改 iptables  
-无需修改路由表  
-
-Zapret2 会自动：
-
-- 捕获所有访问 argo 的流量  
-- 注入 DPI 绕过策略  
-- 多队列分摊  
-- IPv4/IPv6 全支持  
-- nft/iptables 自动适配  
-
----
-
-# ❓ FAQ
-
-### Q1：我需要修改 mihomo/sing-box 配置吗？  
-**不需要。**  
-Zapret2 在 NFQUEUE 层处理，不影响代理配置。
-
----
-
-### Q2：Cloudflare Argo / VLESS / Trojan / Hysteria 都能用吗？  
-**能。**  
-只要是基于域名的流量，都能通过 hostlist 匹配。
-
----
-
-### Q3：IPv6 会不会漏掉？  
-不会。  
-v3 已经完整支持 IPv6 NFQUEUE。
-
----
-
-### Q4：我用的是 nftables，会不会冲突？  
-不会。  
-Zapret2 使用独立表：
-
-```
-table inet zapret2
-```
-
-不会影响系统原有规则。
-
----
-
-### Q5：我用的是 iptables，会不会影响现有规则？  
-不会。  
-Zapret2 只添加带有 `ZAPRET2` 注释的规则，卸载时会自动清理。
-
----
-
-### Q6：gateway 模式会不会影响路由器？  
-不会。  
-脚本自动跳过：
-
-- 内网流量  
-- SSH  
-- DNS  
-- 已建立连接（可选）  
-
----
-
-# 🧩 高级用法（可选）
-
-- 自定义策略（Lua）  
-- 多节点多策略  
-- 旁路由透明代理  
-- Cloudflare Argo 最佳策略  
-- Reality 最佳策略  
-- 多队列优化（200–203）  
-- 自定义 NFQUEUE 范围  
 
