@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 Panel v5（终极生产版：处理极端网络与双栈环境）
+# Zapret2 Panel v5.1（生产稳定版 - 修复多环境隐患）
 # 修复与优化：
-# - 焦土级防火墙清理 (双杀 iptables/nftables 残留)
-# - 完整支持 IPv6 流量捕获 (ip6tables/nft6)
-# - 遍历全网卡 IP 豁免 + 端口级 DNS (53) 豁免，绝对防劫持
-# - Host/IP 列表正则清洗 (防畸形导致崩溃)
-# - Systemd 防重启风暴 + 进程/队列强杀释放
+# - 彻底修复策略参数切割问题 (使用整行传递)
+# - 修正 nftables 规则语法 (去除冗余协议声明)
+# - 添加 table/chain 存在性检查 (避免重复创建报错)
+# - 多IP安全遍历，过滤空元素
+# - 检测 iptables-legacy/iptables-nft 环境并避免冲突
+# - 优化 nfqws 进程强杀逻辑，增加冷却期
+# - 完善 IPv6 CIDR 过滤 (默认允许，可配置)
+# - 增加详细日志与错误捕获
+# - 保留所有原有功能，交互界面不变
 # ============================================================
 
 ZAPRET2_DIR="/root/catmi/Zapret2"
@@ -33,10 +37,9 @@ require_root() {
 
 check_deps() {
   local missing=()
-  for c in git make gcc iptables ip awk sed grep killall; do
+  for c in git make gcc iptables ip awk sed grep killall curl; do
     command -v "$c" >/dev/null 2>&1 || missing+=("$c")
   done
-
   if ((${#missing[@]})); then
     warn "缺少基础依赖，尝试自动安装..."
     apt-get update -y || true
@@ -46,20 +49,41 @@ check_deps() {
   fi
 }
 
+# 检测防火墙后端环境，避免 iptables-nft 与 nft 同时生效
+detect_firewall_backend() {
+  if command -v nft >/dev/null 2>&1; then
+    echo "nft"
+  elif command -v iptables >/dev/null 2>&1; then
+    # 检查 iptables 是否由 nftables 提供
+    if iptables --version 2>&1 | grep -q "nf_tables"; then
+      # iptables-nft 存在但 nft 命令不可用？回退尝试使用 iptables-legacy
+      if command -v iptables-legacy >/dev/null 2>&1; then
+        echo "iptables-legacy"
+      else
+        echo "iptables"
+      fi
+    else
+      echo "iptables"
+    fi
+  else
+    echo "none"
+  fi
+}
+
 install_zapret2() {
   msg "${GREEN}开始安装 Zapret2 ...${RESET}"
   check_deps
-  
+
   trap 'err "安装中断或出错，正在执行回滚清理..."; uninstall_zapret2 >/dev/null 2>&1; exit 1' ERR
   set -e
 
   systemctl stop "$SERVICE" 2>/dev/null || true
   rm -rf "$ZAPRET2_DIR"
-  
+
   git clone "$REPO_URL" "$ZAPRET2_DIR"
   cd "$ZAPRET2_DIR"
   make
-  
+
   if [[ -x "nfqws" ]]; then
     cp nfqws nfqws2
   elif [[ -x "binaries/my/nfqws" ]]; then
@@ -109,241 +133,383 @@ EOF
 }
 
 generate_run_script() {
-  cat > "$ZAPRET2_DIR/run_nfqws2.sh" <<EOF
+  cat > "$ZAPRET2_DIR/run_nfqws2.sh" <<'SCRIPT'
 #!/usr/bin/env bash
-ZAPRET2_DIR="$ZAPRET2_DIR"
-ZAPRET2_CFG="\$ZAPRET2_DIR/config"
-PROFILE_DIR="\$ZAPRET2_CFG/profiles"
-QUEUE_NUM=$QUEUE_NUM
+ZAPRET2_DIR="/root/catmi/Zapret2"
+ZAPRET2_CFG="$ZAPRET2_DIR/config"
+PROFILE_DIR="$ZAPRET2_CFG/profiles"
+QUEUE_NUM=200
 
-# 强制释放僵尸进程与队列占用
-killall -9 nfqws2 2>/dev/null
-sleep 0.5
+# 记录日志
+logfile="/var/log/nfqws2.log"
+exec > >(tee -a "$logfile") 2>&1
+echo "========== $(date) - nfqws2 启动 =========="
 
-source "\$ZAPRET2_CFG/pkt.conf"
-
-args=(
-  "--queue-num=\$QUEUE_NUM"
-  "--queue-bypass"
-  "--tcp-pkt-in=\$TCP_PKT_IN"
-  "--tcp-pkt-out=\$TCP_PKT_OUT"
-  "--udp-pkt-in=\$UDP_PKT_IN"
-  "--udp-pkt-out=\$UDP_PKT_OUT"
-)
-
-# 读取全局策略
-if [[ -f "\$ZAPRET2_CFG/strategy.conf" ]]; then
-  while read -r line; do
-    [[ -z "\$line" || "\$line" =~ ^# ]] && continue
-    for token in \$line; do
-      args+=("\$token")
-    done
-  done < "\$ZAPRET2_CFG/strategy.conf"
+# 强制释放僵尸进程与队列占用（增加等待）
+if pgrep -x nfqws2 >/dev/null 2>&1; then
+    echo "发现残留 nfqws2 进程，发送 SIGKILL..."
+    killall -9 nfqws2 2>/dev/null
+    sleep 0.8
 fi
 
-# 动态合并配置并执行严格的数据清洗
-MASTER_HOST="\$ZAPRET2_CFG/master_hostlist.txt"
-MASTER_IP="\$ZAPRET2_CFG/master_iplist.txt"
+source "$ZAPRET2_CFG/pkt.conf"
+
+args=(
+  "--queue-num=$QUEUE_NUM"
+  "--queue-bypass"
+  "--tcp-pkt-in=$TCP_PKT_IN"
+  "--tcp-pkt-out=$TCP_PKT_OUT"
+  "--udp-pkt-in=$UDP_PKT_IN"
+  "--udp-pkt-out=$UDP_PKT_OUT"
+)
+
+# 读取全局策略：整行作为一个参数，不再分割
+if [[ -f "$ZAPRET2_CFG/strategy.conf" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # 跳过空行和以#开头的注释
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    # 清洗行首尾空格
+    line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    if [[ -n "$line" ]]; then
+      # 整个行作为一个参数
+      args+=("$line")
+      echo "策略参数: $line"
+    fi
+  done < "$ZAPRET2_CFG/strategy.conf"
+fi
+
+# 动态合并 host/ip 列表
+MASTER_HOST="$ZAPRET2_CFG/master_hostlist.txt"
+MASTER_IP="$ZAPRET2_CFG/master_iplist.txt"
 TMP_HOST="/tmp/zapret_host.tmp"
 TMP_IP="/tmp/zapret_ip.tmp"
-> "\$TMP_HOST"
-> "\$TMP_IP"
+> "$TMP_HOST"
+> "$TMP_IP"
 
-if [[ -d "\$PROFILE_DIR" ]]; then
-  for p in "\$PROFILE_DIR"/*; do
-    [[ -d "\$p" ]] || continue
-    [[ -f "\$p/hostlist.txt" ]] && cat "\$p/hostlist.txt" >> "\$TMP_HOST"
-    [[ -f "\$p/iplist.txt" ]] && cat "\$p/iplist.txt" >> "\$TMP_IP"
+if [[ -d "$PROFILE_DIR" ]]; then
+  for p in "$PROFILE_DIR"/*; do
+    [[ -d "$p" ]] || continue
+    [[ -f "$p/hostlist.txt" ]] && cat "$p/hostlist.txt" >> "$TMP_HOST"
+    [[ -f "$p/iplist.txt" ]] && cat "$p/iplist.txt" >> "$TMP_IP"
   done
 fi
 
-# 清洗域名: 剔除协议头、斜杠路径、端口号、空白行
-sed -e 's|^https*://||i' -e 's|/.*||' -e 's|:[0-9]*||' "\$TMP_HOST" | awk 'NF' | sort -u > "\$MASTER_HOST"
+# 清洗域名：去掉协议、路径、端口号，保留主机名
+sed -e 's|^https*://||i' -e 's|/.*||' -e 's|:[0-9]*||' "$TMP_HOST" | awk 'NF' | sort -u > "$MASTER_HOST"
 
-# 清洗 IP: 仅保留合法的 IPv4/IPv6 字符段，剔除杂质
-grep -oE '[0-9a-fA-F.:/]+' "\$TMP_IP" | awk 'NF' | sort -u > "\$MASTER_IP"
+# 清洗 IP：保留有效的 IPv4/IPv6/CIDR，去除杂物
+grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?|([0-9a-fA-F:]+(:[0-9a-fA-F]+){1,7})(/[0-9]{1,3})?' "$TMP_IP" | awk 'NF' | sort -u > "$MASTER_IP"
 
-[[ -s "\$MASTER_HOST" ]] && args+=("--hostlist=\$MASTER_HOST")
-[[ -s "\$MASTER_IP" ]] && args+=("--ipset=\$MASTER_IP")
+if [[ -s "$MASTER_HOST" ]]; then
+  args+=("--hostlist=$MASTER_HOST")
+  echo "加载域名列表: $(wc -l < "$MASTER_HOST") 行"
+fi
+if [[ -s "$MASTER_IP" ]]; then
+  args+=("--ipset=$MASTER_IP")
+  echo "加载 IP 列表: $(wc -l < "$MASTER_IP") 行"
+fi
 
-exec "\$ZAPRET2_DIR/nfqws2" "\${args[@]}"
-EOF
+echo "执行: $ZAPRET2_DIR/nfqws2 ${args[*]}"
+exec "$ZAPRET2_DIR/nfqws2" "${args[@]}"
+SCRIPT
   chmod +x "$ZAPRET2_DIR/run_nfqws2.sh"
 }
 
 generate_firewall_scripts() {
-  cat > "$ZAPRET2_DIR/apply_rules.sh" <<EOF
+  # 生成应用规则脚本，包含 backend 检测与链存在性检查
+  cat > "$ZAPRET2_DIR/apply_rules.sh" <<'SCRIPT'
 #!/usr/bin/env bash
-ZAPRET2_DIR="$ZAPRET2_DIR"
-ZAPRET2_CFG="\$ZAPRET2_DIR/config"
-QUEUE_NUM=$QUEUE_NUM
+ZAPRET2_DIR="/root/catmi/Zapret2"
+ZAPRET2_CFG="$ZAPRET2_DIR/config"
+QUEUE_NUM=200
 
-# 应用前调用焦土清理
-"\$ZAPRET2_DIR/clear_rules.sh" 2>/dev/null
+# 焦土清理原有规则
+"$ZAPRET2_DIR/clear_rules.sh" 2>/dev/null
 
-backend="none"
-if command -v nft >/dev/null 2>&1; then
-  backend="nft"
-elif command -v iptables >/dev/null 2>&1; then
-  backend="iptables"
+source "$ZAPRET2_CFG/ports.conf"
+MODE=$(cat "$ZAPRET2_CFG/mode.conf" 2>/dev/null || echo "local")
+
+# 收集所有本机全局IP（IPv4/IPv6）
+LOCAL_V4=$(ip -4 addr show scope global | awk '/inet / {split($2, a, "/"); print a[1]}')
+LOCAL_V6=$(ip -6 addr show scope global | awk '/inet6 / {split($2, a, "/"); print a[1]}')
+
+# 构建安全白名单（私有网络 + 本机IP），逐条写入数组
+SAFE_V4=(
+  127.0.0.0/8
+  10.0.0.0/8
+  172.16.0.0/12
+  192.168.0.0/16
+)
+SAFE_V6=(
+  ::1/128
+  fe80::/10
+  fc00::/7
+)
+
+# 添加本机所有 IPv4 地址
+while IFS= read -r ip; do
+  [[ -n "$ip" ]] && SAFE_V4+=("$ip")
+done <<< "$LOCAL_V4"
+
+# 添加本机所有 IPv6 地址
+while IFS= read -r ip; do
+  [[ -n "$ip" ]] && SAFE_V6+=("$ip")
+done <<< "$LOCAL_V6"
+
+# 检测后端
+backend=$(cat "$ZAPRET2_CFG/backend" 2>/dev/null || echo "auto")
+if [[ "$backend" == "auto" ]]; then
+  if command -v nft >/dev/null 2>&1; then
+    backend="nft"
+  elif command -v iptables >/dev/null 2>&1; then
+    if iptables --version 2>&1 | grep -q "nf_tables"; then
+      if command -v iptables-legacy >/dev/null 2>&1; then
+        backend="iptables-legacy"
+        # 如果存在 nft 残留，强制清理
+        nft delete table inet zapret2 2>/dev/null
+      else
+        backend="iptables"
+      fi
+    else
+      backend="iptables"
+    fi
+  else
+    echo "无可用的防火墙！"
+    exit 1
+  fi
 fi
 
-source "\$ZAPRET2_CFG/ports.conf"
-MODE=\$(cat "\$ZAPRET2_CFG/mode.conf" 2>/dev/null || echo "local")
-
-# 绝对安全的本机IP获取: 遍历所有网卡的 global IP
-LOCAL_V4=\$(ip -4 addr show scope global | awk '/inet / {split(\$2, a, "/"); print a[1]}')
-LOCAL_V6=\$(ip -6 addr show scope global | awk '/inet6 / {split(\$2, a, "/"); print a[1]}')
-
-SAFE_V4="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 \$LOCAL_V4"
-SAFE_V6="::1/128 fe80::/10 fc00::/7 \$LOCAL_V6"
-
-if [[ "\$backend" == "nft" ]]; then
-  nft add table inet zapret2
-  nft add chain inet zapret2 output "{ type filter hook output priority -150; }"
-  if [[ "\$MODE" == "gateway" ]]; then
-    nft add chain inet zapret2 prerouting "{ type filter hook prerouting priority -150; }"
-    nft add chain inet zapret2 forward "{ type filter hook forward priority -150; }"
+# ============ nft 模式 ============
+if [[ "$backend" == "nft" ]]; then
+  # 创建 table 如果不存在
+  if ! nft list table inet zapret2 >/dev/null 2>&1; then
+    nft add table inet zapret2
   fi
 
-  # 端口级 DNS 防劫持 (双协议)
-  nft add rule inet zapret2 output udp dport 53 return
-  nft add rule inet zapret2 output tcp dport 53 return
-  [[ "\$MODE" == "gateway" ]] && {
-    nft add rule inet zapret2 prerouting udp dport 53 return
-    nft add rule inet zapret2 prerouting tcp dport 53 return
-    nft add rule inet zapret2 forward udp dport 53 return
-    nft add rule inet zapret2 forward tcp dport 53 return
-  }
+  # 创建必要的 chain（存在性检查后创建）
+  chain_output="zapret2_output"
+  if ! nft list chain inet zapret2 $chain_output >/dev/null 2>&1; then
+    nft add chain inet zapret2 $chain_output "{ type filter hook output priority -150; }"
+  fi
 
-  for net in \$SAFE_V4; do
-    [[ -n "\$net" ]] && nft add rule inet zapret2 output ip daddr \$net return 2>/dev/null
-    [[ "\$MODE" == "gateway" && -n "\$net" ]] && {
-      nft add rule inet zapret2 prerouting ip daddr \$net return 2>/dev/null
-      nft add rule inet zapret2 forward ip daddr \$net return 2>/dev/null
-    }
+  if [[ "$MODE" == "gateway" ]]; then
+    chain_pre="zapret2_prerouting"
+    chain_fwd="zapret2_forward"
+    if ! nft list chain inet zapret2 $chain_pre >/dev/null 2>&1; then
+      nft add chain inet zapret2 $chain_pre "{ type filter hook prerouting priority -150; }"
+    fi
+    if ! nft list chain inet zapret2 $chain_fwd >/dev/null 2>&1; then
+      nft add chain inet zapret2 $chain_fwd "{ type filter hook forward priority -150; }"
+    fi
+  fi
+
+  # 定义辅助函数，添加规则（先清除对应 chain 的内建规则？直接追加，确保每次执行前已经 clear 了所有规则，所以链是空的）
+  # 因为先调用了 clear_rules，所以链已清空，可直接添加
+  # 1. DNS 豁免
+  rules_output=(
+    "udp dport 53 return"
+    "tcp dport 53 return"
+  )
+  for rule in "${rules_output[@]}"; do
+    nft add rule inet zapret2 $chain_output $rule
+  done
+  if [[ "$MODE" == "gateway" ]]; then
+    for rule in "${rules_output[@]}"; do
+      nft add rule inet zapret2 $chain_pre $rule
+      nft add rule inet zapret2 $chain_fwd $rule
+    done
+  fi
+
+  # 2. 安全 IP 豁免
+  for net in "${SAFE_V4[@]}"; do
+    [[ -z "$net" ]] && continue
+    nft add rule inet zapret2 $chain_output ip daddr $net return
+    if [[ "$MODE" == "gateway" ]]; then
+      nft add rule inet zapret2 $chain_pre ip daddr $net return
+      nft add rule inet zapret2 $chain_fwd ip daddr $net return
+    fi
+  done
+  for net in "${SAFE_V6[@]}"; do
+    [[ -z "$net" ]] && continue
+    nft add rule inet zapret2 $chain_output ip6 daddr $net return
+    if [[ "$MODE" == "gateway" ]]; then
+      nft add rule inet zapret2 $chain_pre ip6 daddr $net return
+      nft add rule inet zapret2 $chain_fwd ip6 daddr $net return
+    fi
   done
 
-  for net in \$SAFE_V6; do
-    [[ -n "\$net" ]] && nft add rule inet zapret2 output ip6 daddr \$net return 2>/dev/null
-    [[ "\$MODE" == "gateway" && -n "\$net" ]] && {
-      nft add rule inet zapret2 prerouting ip6 daddr \$net return 2>/dev/null
-      nft add rule inet zapret2 forward ip6 daddr \$net return 2>/dev/null
-    }
-  done
-
-  # 完整双栈捕获
-  if [[ -n "\$TCP4_PORTS" ]]; then
-    nft add rule inet zapret2 output ip protocol tcp tcp dport { \$TCP4_PORTS } queue num \$QUEUE_NUM bypass
-    [[ "\$MODE" == "gateway" ]] && {
-      nft add rule inet zapret2 prerouting ip protocol tcp tcp dport { \$TCP4_PORTS } queue num \$QUEUE_NUM bypass
-      nft add rule inet zapret2 forward ip protocol tcp tcp dport { \$TCP4_PORTS } queue num \$QUEUE_NUM bypass
-    }
+  # 3. NFQUEUE 重定向（协议自动检测，不重复声明）
+  if [[ -n "$TCP4_PORTS" ]]; then
+    nft add rule inet zapret2 $chain_output meta l4proto tcp tcp dport { $TCP4_PORTS } queue num $QUEUE_NUM bypass
+    if [[ "$MODE" == "gateway" ]]; then
+      nft add rule inet zapret2 $chain_pre meta l4proto tcp tcp dport { $TCP4_PORTS } queue num $QUEUE_NUM bypass
+      nft add rule inet zapret2 $chain_fwd meta l4proto tcp tcp dport { $TCP4_PORTS } queue num $QUEUE_NUM bypass
+    fi
   fi
-  if [[ -n "\$UDP4_PORTS" ]]; then
-    nft add rule inet zapret2 output ip protocol udp udp dport { \$UDP4_PORTS } queue num \$QUEUE_NUM bypass
-    [[ "\$MODE" == "gateway" ]] && {
-      nft add rule inet zapret2 prerouting ip protocol udp udp dport { \$UDP4_PORTS } queue num \$QUEUE_NUM bypass
-      nft add rule inet zapret2 forward ip protocol udp udp dport { \$UDP4_PORTS } queue num \$QUEUE_NUM bypass
-    }
+  if [[ -n "$UDP4_PORTS" ]]; then
+    nft add rule inet zapret2 $chain_output meta l4proto udp udp dport { $UDP4_PORTS } queue num $QUEUE_NUM bypass
+    if [[ "$MODE" == "gateway" ]]; then
+      nft add rule inet zapret2 $chain_pre meta l4proto udp udp dport { $UDP4_PORTS } queue num $QUEUE_NUM bypass
+      nft add rule inet zapret2 $chain_fwd meta l4proto udp udp dport { $UDP4_PORTS } queue num $QUEUE_NUM bypass
+    fi
   fi
-  if [[ -n "\$TCP6_PORTS" ]]; then
-    nft add rule inet zapret2 output ip6 protocol tcp tcp dport { \$TCP6_PORTS } queue num \$QUEUE_NUM bypass
-    [[ "\$MODE" == "gateway" ]] && {
-      nft add rule inet zapret2 prerouting ip6 protocol tcp tcp dport { \$TCP6_PORTS } queue num \$QUEUE_NUM bypass
-      nft add rule inet zapret2 forward ip6 protocol tcp tcp dport { \$TCP6_PORTS } queue num \$QUEUE_NUM bypass
-    }
+  if [[ -n "$TCP6_PORTS" ]]; then
+    nft add rule inet zapret2 $chain_output meta l4proto tcp tcp dport { $TCP6_PORTS } queue num $QUEUE_NUM bypass
+    if [[ "$MODE" == "gateway" ]]; then
+      nft add rule inet zapret2 $chain_pre meta l4proto tcp tcp dport { $TCP6_PORTS } queue num $QUEUE_NUM bypass
+      nft add rule inet zapret2 $chain_fwd meta l4proto tcp tcp dport { $TCP6_PORTS } queue num $QUEUE_NUM bypass
+    fi
   fi
-  if [[ -n "\$UDP6_PORTS" ]]; then
-    nft add rule inet zapret2 output ip6 protocol udp udp dport { \$UDP6_PORTS } queue num \$QUEUE_NUM bypass
-    [[ "\$MODE" == "gateway" ]] && {
-      nft add rule inet zapret2 prerouting ip6 protocol udp udp dport { \$UDP6_PORTS } queue num \$QUEUE_NUM bypass
-      nft add rule inet zapret2 forward ip6 protocol udp udp dport { \$UDP6_PORTS } queue num \$QUEUE_NUM bypass
-    }
+  if [[ -n "$UDP6_PORTS" ]]; then
+    nft add rule inet zapret2 $chain_output meta l4proto udp udp dport { $UDP6_PORTS } queue num $QUEUE_NUM bypass
+    if [[ "$MODE" == "gateway" ]]; then
+      nft add rule inet zapret2 $chain_pre meta l4proto udp udp dport { $UDP6_PORTS } queue num $QUEUE_NUM bypass
+      nft add rule inet zapret2 $chain_fwd meta l4proto udp udp dport { $UDP6_PORTS } queue num $QUEUE_NUM bypass
+    fi
   fi
   exit 0
 fi
 
-if [[ "\$backend" == "iptables" ]]; then
-  # 初始化独立链
-  for table in iptables ip6tables; do
-    \$table -t mangle -N ZAPRET2_OUT
-    [[ "\$MODE" == "gateway" ]] && \$table -t mangle -N ZAPRET2_PRE && \$table -t mangle -N ZAPRET2_FWD
-    
-    # DNS 防劫持
-    \$table -t mangle -A ZAPRET2_OUT -p udp --dport 53 -j RETURN
-    \$table -t mangle -A ZAPRET2_OUT -p tcp --dport 53 -j RETURN
-    [[ "\$MODE" == "gateway" ]] && {
-      \$table -t mangle -A ZAPRET2_PRE -p udp --dport 53 -j RETURN
-      \$table -t mangle -A ZAPRET2_PRE -p tcp --dport 53 -j RETURN
-      \$table -t mangle -A ZAPRET2_FWD -p udp --dport 53 -j RETURN
-      \$table -t mangle -A ZAPRET2_FWD -p tcp --dport 53 -j RETURN
-    }
+# ============ iptables / iptables-legacy 模式 ============
+if [[ "$backend" == "iptables" || "$backend" == "iptables-legacy" ]]; then
+  # 确定使用哪个 iptables 命令
+  ipt4="iptables"
+  ipt6="ip6tables"
+  if [[ "$backend" == "iptables-legacy" ]]; then
+    ipt4="iptables-legacy"
+    ipt6="ip6tables-legacy"
+  fi
+
+  # 创建独立链（若已存在则清空）
+  for table in "$ipt4" "$ipt6"; do
+    for chain in ZAPRET2_OUT ZAPRET2_PRE ZAPRET2_FWD; do
+      if ! $table -t mangle -L $chain >/dev/null 2>&1; then
+        $table -t mangle -N $chain
+      else
+        $table -t mangle -F $chain
+      fi
+    done
   done
 
-  # 写入本机 IP 直连
-  for net in \$SAFE_V4; do
-    [[ -z "\$net" ]] && continue
-    iptables -t mangle -A ZAPRET2_OUT -d \$net -j RETURN
-    [[ "\$MODE" == "gateway" ]] && iptables -t mangle -A ZAPRET2_PRE -d \$net -j RETURN && iptables -t mangle -A ZAPRET2_FWD -d \$net -j RETURN
+  # DNS 豁免
+  for table in "$ipt4" "$ipt6"; do
+    $table -t mangle -A ZAPRET2_OUT -p udp --dport 53 -j RETURN
+    $table -t mangle -A ZAPRET2_OUT -p tcp --dport 53 -j RETURN
+    if [[ "$MODE" == "gateway" ]]; then
+      $table -t mangle -A ZAPRET2_PRE -p udp --dport 53 -j RETURN
+      $table -t mangle -A ZAPRET2_PRE -p tcp --dport 53 -j RETURN
+      $table -t mangle -A ZAPRET2_FWD -p udp --dport 53 -j RETURN
+      $table -t mangle -A ZAPRET2_FWD -p tcp --dport 53 -j RETURN
+    fi
   done
-  for net in \$SAFE_V6; do
-    [[ -z "\$net" ]] && continue
-    ip6tables -t mangle -A ZAPRET2_OUT -d \$net -j RETURN
-    [[ "\$MODE" == "gateway" ]] && ip6tables -t mangle -A ZAPRET2_PRE -d \$net -j RETURN && ip6tables -t mangle -A ZAPRET2_FWD -d \$net -j RETURN
+
+  # 安全 IP 豁免
+  for net in "${SAFE_V4[@]}"; do
+    [[ -z "$net" ]] && continue
+    $ipt4 -t mangle -A ZAPRET2_OUT -d $net -j RETURN
+    if [[ "$MODE" == "gateway" ]]; then
+      $ipt4 -t mangle -A ZAPRET2_PRE -d $net -j RETURN
+      $ipt4 -t mangle -A ZAPRET2_FWD -d $net -j RETURN
+    fi
+  done
+  for net in "${SAFE_V6[@]}"; do
+    [[ -z "$net" ]] && continue
+    $ipt6 -t mangle -A ZAPRET2_OUT -d $net -j RETURN
+    if [[ "$MODE" == "gateway" ]]; then
+      $ipt6 -t mangle -A ZAPRET2_PRE -d $net -j RETURN
+      $ipt6 -t mangle -A ZAPRET2_FWD -d $net -j RETURN
+    fi
   done
 
-  QUEUE="--queue-num \$QUEUE_NUM --queue-bypass"
+  QUEUE="--queue-num $QUEUE_NUM --queue-bypass"
 
-  # IPv4 捕获
-  [[ -n "\$TCP4_PORTS" ]] && {
-    iptables -t mangle -A ZAPRET2_OUT -p tcp -m multiport --dports \$TCP4_PORTS -j NFQUEUE \$QUEUE
-    [[ "\$MODE" == "gateway" ]] && iptables -t mangle -A ZAPRET2_PRE -p tcp -m multiport --dports \$TCP4_PORTS -j NFQUEUE \$QUEUE && iptables -t mangle -A ZAPRET2_FWD -p tcp -m multiport --dports \$TCP4_PORTS -j NFQUEUE \$QUEUE
-  }
-  [[ -n "\$UDP4_PORTS" ]] && {
-    iptables -t mangle -A ZAPRET2_OUT -p udp -m multiport --dports \$UDP4_PORTS -j NFQUEUE \$QUEUE
-    [[ "\$MODE" == "gateway" ]] && iptables -t mangle -A ZAPRET2_PRE -p udp -m multiport --dports \$UDP4_PORTS -j NFQUEUE \$QUEUE && iptables -t mangle -A ZAPRET2_FWD -p udp -m multiport --dports \$UDP4_PORTS -j NFQUEUE \$QUEUE
-  }
-  # IPv6 捕获
-  [[ -n "\$TCP6_PORTS" ]] && {
-    ip6tables -t mangle -A ZAPRET2_OUT -p tcp -m multiport --dports \$TCP6_PORTS -j NFQUEUE \$QUEUE
-    [[ "\$MODE" == "gateway" ]] && ip6tables -t mangle -A ZAPRET2_PRE -p tcp -m multiport --dports \$TCP6_PORTS -j NFQUEUE \$QUEUE && ip6tables -t mangle -A ZAPRET2_FWD -p tcp -m multiport --dports \$TCP6_PORTS -j NFQUEUE \$QUEUE
-  }
-  [[ -n "\$UDP6_PORTS" ]] && {
-    ip6tables -t mangle -A ZAPRET2_OUT -p udp -m multiport --dports \$UDP6_PORTS -j NFQUEUE \$QUEUE
-    [[ "\$MODE" == "gateway" ]] && ip6tables -t mangle -A ZAPRET2_PRE -p udp -m multiport --dports \$UDP6_PORTS -j NFQUEUE \$QUEUE && ip6tables -t mangle -A ZAPRET2_FWD -p udp -m multiport --dports \$UDP6_PORTS -j NFQUEUE \$QUEUE
-  }
+  # 按协议和地址族添加 NFQUEUE 规则
+  if [[ -n "$TCP4_PORTS" ]]; then
+    $ipt4 -t mangle -A ZAPRET2_OUT -p tcp -m multiport --dports $TCP4_PORTS -j NFQUEUE $QUEUE
+    if [[ "$MODE" == "gateway" ]]; then
+      $ipt4 -t mangle -A ZAPRET2_PRE -p tcp -m multiport --dports $TCP4_PORTS -j NFQUEUE $QUEUE
+      $ipt4 -t mangle -A ZAPRET2_FWD -p tcp -m multiport --dports $TCP4_PORTS -j NFQUEUE $QUEUE
+    fi
+  fi
+  if [[ -n "$UDP4_PORTS" ]]; then
+    $ipt4 -t mangle -A ZAPRET2_OUT -p udp -m multiport --dports $UDP4_PORTS -j NFQUEUE $QUEUE
+    if [[ "$MODE" == "gateway" ]]; then
+      $ipt4 -t mangle -A ZAPRET2_PRE -p udp -m multiport --dports $UDP4_PORTS -j NFQUEUE $QUEUE
+      $ipt4 -t mangle -A ZAPRET2_FWD -p udp -m multiport --dports $UDP4_PORTS -j NFQUEUE $QUEUE
+    fi
+  fi
+  if [[ -n "$TCP6_PORTS" ]]; then
+    $ipt6 -t mangle -A ZAPRET2_OUT -p tcp -m multiport --dports $TCP6_PORTS -j NFQUEUE $QUEUE
+    if [[ "$MODE" == "gateway" ]]; then
+      $ipt6 -t mangle -A ZAPRET2_PRE -p tcp -m multiport --dports $TCP6_PORTS -j NFQUEUE $QUEUE
+      $ipt6 -t mangle -A ZAPRET2_FWD -p tcp -m multiport --dports $TCP6_PORTS -j NFQUEUE $QUEUE
+    fi
+  fi
+  if [[ -n "$UDP6_PORTS" ]]; then
+    $ipt6 -t mangle -A ZAPRET2_OUT -p udp -m multiport --dports $UDP6_PORTS -j NFQUEUE $QUEUE
+    if [[ "$MODE" == "gateway" ]]; then
+      $ipt6 -t mangle -A ZAPRET2_PRE -p udp -m multiport --dports $UDP6_PORTS -j NFQUEUE $QUEUE
+      $ipt6 -t mangle -A ZAPRET2_FWD -p udp -m multiport --dports $UDP6_PORTS -j NFQUEUE $QUEUE
+    fi
+  fi
 
-  # 挂载入口
-  for table in iptables ip6tables; do
-    \$table -t mangle -I OUTPUT -j ZAPRET2_OUT
-    [[ "\$MODE" == "gateway" ]] && \$table -t mangle -I PREROUTING -j ZAPRET2_PRE && \$table -t mangle -I FORWARD -j ZAPRET2_FWD
+  # 挂载入口（先移除旧入口再添加）
+  for table in "$ipt4" "$ipt6"; do
+    $table -t mangle -D OUTPUT -j ZAPRET2_OUT 2>/dev/null
+    $table -t mangle -I OUTPUT -j ZAPRET2_OUT
+    if [[ "$MODE" == "gateway" ]]; then
+      $table -t mangle -D PREROUTING -j ZAPRET2_PRE 2>/dev/null
+      $table -t mangle -D FORWARD -j ZAPRET2_FWD 2>/dev/null
+      $table -t mangle -I PREROUTING -j ZAPRET2_PRE
+      $table -t mangle -I FORWARD -j ZAPRET2_FWD
+    fi
   done
   exit 0
 fi
-EOF
+SCRIPT
   chmod +x "$ZAPRET2_DIR/apply_rules.sh"
 
-  cat > "$ZAPRET2_DIR/clear_rules.sh" <<'EOF'
+  # 编写清除脚本（支持多种后端）
+  cat > "$ZAPRET2_DIR/clear_rules.sh" <<'CLEARSCRIPT'
 #!/usr/bin/env bash
-# 焦土清理策略：无论底层是啥，全部执行一遍清理，防 iptables-nft 混合污染
+echo "清除所有 Zapret2 防火墙规则..."
+
+# nftables
 if command -v nft >/dev/null 2>&1; then
   nft delete table inet zapret2 2>/dev/null
 fi
-if command -v iptables >/dev/null 2>&1; then
-  for table in iptables ip6tables; do
-    $table -t mangle -D OUTPUT -j ZAPRET2_OUT 2>/dev/null
-    $table -t mangle -D PREROUTING -j ZAPRET2_PRE 2>/dev/null
-    $table -t mangle -D FORWARD -j ZAPRET2_FWD 2>/dev/null
+
+# iptables / iptables-legacy
+for cmd in iptables iptables-legacy; do
+  if command -v $cmd >/dev/null 2>&1; then
+    $cmd -t mangle -D OUTPUT -j ZAPRET2_OUT 2>/dev/null || true
+    $cmd -t mangle -D PREROUTING -j ZAPRET2_PRE 2>/dev/null || true
+    $cmd -t mangle -D FORWARD -j ZAPRET2_FWD 2>/dev/null || true
     for chain in ZAPRET2_OUT ZAPRET2_PRE ZAPRET2_FWD; do
-      $table -t mangle -F $chain 2>/dev/null
-      $table -t mangle -X $chain 2>/dev/null
+      $cmd -t mangle -F $chain 2>/dev/null || true
+      $cmd -t mangle -X $chain 2>/dev/null || true
     done
-  done
-fi
-exit 0
-EOF
+  fi
+done
+
+# ip6tables
+for cmd in ip6tables ip6tables-legacy; do
+  if command -v $cmd >/dev/null 2>&1; then
+    $cmd -t mangle -D OUTPUT -j ZAPRET2_OUT 2>/dev/null || true
+    $cmd -t mangle -D PREROUTING -j ZAPRET2_PRE 2>/dev/null || true
+    $cmd -t mangle -D FORWARD -j ZAPRET2_FWD 2>/dev/null || true
+    for chain in ZAPRET2_OUT ZAPRET2_PRE ZAPRET2_FWD; do
+      $cmd -t mangle -F $chain 2>/dev/null || true
+      $cmd -t mangle -X $chain 2>/dev/null || true
+    done
+  fi
+done
+echo "清理完成"
+CLEARSCRIPT
   chmod +x "$ZAPRET2_DIR/clear_rules.sh"
+
+  # 设置默认 backend（自动检测）
+  detect_firewall_backend > "$ZAPRET2_CFG/backend"
 }
 
 generate_systemd_service() {
@@ -351,9 +517,9 @@ generate_systemd_service() {
 [Unit]
 Description=Zapret2 nfqws2 DPI Bypass Service
 After=network.target
-# 防重启风暴: 30秒内最多重启5次，否则挂起
-StartLimitIntervalSec=30
-StartLimitBurst=5
+# 防重启风暴: 60秒内最多重启3次，否则进入维护模式
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -366,13 +532,15 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_KILL
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_KILL
 
 Restart=on-failure
-RestartSec=3
+RestartSec=5
 LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
 EOF
 }
+
+# ---------- 交互菜单 ---------- (保持原有逻辑，仅修改 backend 检测调用)
 
 menu_strategy() {
   [[ -d "$ZAPRET2_CFG" ]] || { err "请先安装 Zapret2！"; return; }
@@ -462,15 +630,15 @@ run_blockcheck2() {
   [[ -d "$ZAPRET2_DIR" ]] || { err "未安装！"; return; }
   warn "将暂停规则以运行 Blockcheck (Ctrl+C 也会自动恢复规则)..."
   "$ZAPRET2_DIR/clear_rules.sh" 2>/dev/null
-  
+
   trap '"$ZAPRET2_DIR/apply_rules.sh" 2>/dev/null; msg "\n${BLUE}[OK] 防火墙规则已安全恢复！${RESET}"' EXIT HUP INT TERM
-  
+
   if [[ -f "$ZAPRET2_DIR/blockcheck2.sh" ]]; then
     (cd "$ZAPRET2_DIR" && ./blockcheck2.sh)
   elif [[ -f "$ZAPRET2_DIR/blockcheck.sh" ]]; then
     (cd "$ZAPRET2_DIR" && ./blockcheck.sh)
   fi
-  
+
   trap - EXIT HUP INT TERM
   "$ZAPRET2_DIR/apply_rules.sh" 2>/dev/null
   ok "探测结束，规则已恢复"
@@ -500,7 +668,7 @@ menu_ports() {
   read -rp "UDP4_PORTS (默认保持不变直接回车): " input_udp4
   read -rp "TCP6_PORTS (默认保持不变直接回车): " input_tcp6
   read -rp "UDP6_PORTS (默认保持不变直接回车): " input_udp6
-  
+
   TCP4_PORTS=${input_tcp4:-$TCP4_PORTS}
   UDP4_PORTS=${input_udp4:-$UDP4_PORTS}
   TCP6_PORTS=${input_tcp6:-$TCP6_PORTS}
@@ -530,7 +698,7 @@ menu_pkt() {
   read -rp "TCP_PKT_IN (不变直接回车): " in_t_in
   read -rp "UDP_PKT_OUT (不变直接回车): " in_u_out
   read -rp "UDP_PKT_IN (不变直接回车): " in_u_in
-  
+
   TCP_PKT_OUT=${in_t_out:-$TCP_PKT_OUT}
   TCP_PKT_IN=${in_t_in:-$TCP_PKT_IN}
   UDP_PKT_OUT=${in_u_out:-$UDP_PKT_OUT}
@@ -553,8 +721,8 @@ menu_main() {
     status=$(systemctl is-active "$SERVICE" 2>/dev/null || echo "未安装")
     [[ "$status" == "active" ]] && status="${GREEN}运行中${RESET}"
     [[ "$status" == "inactive" ]] && status="${YELLOW}已停止/报错${RESET}"
-    
-    echo -e "${GREEN}===== Zapret2 Panel v5 (Production) =====${RESET}"
+
+    echo -e "${GREEN}===== Zapret2 Panel v5.1 (Production Hardened) =====${RESET}"
     echo -e "服务状态：${BLUE}$status${RESET}"
     echo
     echo "1) 安装 Zapret2"
@@ -571,7 +739,7 @@ menu_main() {
     read -rp "选择：" opt
     case "$opt" in
       1) install_zapret2; pause ;;
-      2) 
+      2)
         systemctl restart "$SERVICE" 2>/dev/null
         ok "服务已重启并重载规则"
         pause ;;
