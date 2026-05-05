@@ -15,12 +15,11 @@ MENU="$BASE/Menu_options"
 source "$MENU/colors.sh"
 
 WL_FILE="$CFG/whitelist.txt"
-NODES_DIR="$CFG/nodes"
 
 # ================================
 # 2. 标题（非静默模式）
 # ================================
-[[ $SILENT -eq 0 ]] && title "自动生成白名单（节点 + 本地地址）"
+[[ $SILENT -eq 0 ]] && title "自动生成白名单（本地地址）"
 
 # 清空白名单
 echo "" > "$WL_FILE"
@@ -45,23 +44,14 @@ done
 ip -4 addr show scope global | awk '/inet /{split($2,a,"/");print a[1]}' >> "$WL_FILE"
 ip -6 addr show scope global | awk '/inet6 /{split($2,a,"/");print a[1]}' >> "$WL_FILE"
 
-# -----------------------------
-# 5. 节点 IP/域名
-# -----------------------------
-for f in "$NODES_DIR"/*.node; do
-    [[ -f "$f" ]] || continue
-    host=$(grep '^host=' "$f" | cut -d= -f2)
-    echo "$host" >> "$WL_FILE"
-done
-
 # 去重
 sort -u "$WL_FILE" -o "$WL_FILE"
 
 # -----------------------------
-# 6. 完成提示（非静默模式）
+# 5. 完成提示（非静默模式）
 # -----------------------------
 if [[ $SILENT -eq 0 ]]; then
-    ok "白名单已自动生成："
+    ok "白名单已自动生成（仅本地地址）："
     echo ""
     cat "$WL_FILE"
     echo ""
