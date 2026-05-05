@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - zapret2d（最终优化版）
-# 单实例守护进程 + PID 锁 + flock 锁 + 自愈 + 防重复
+# Zapret2 v7.0 - zapret2d（单实例 + 自愈）
 # ============================================================
 
 set -euo pipefail
@@ -25,7 +24,7 @@ FIREWALLCTL="$BIN/firewallctl"
 HEALTHCHECK="$BIN/healthcheck"
 
 # ============================================================
-# 单实例锁（PID + flock 双保险）
+# 单实例锁（PID + flock）
 # ============================================================
 acquire_lock() {
     exec 9>"$LOCK_FILE"
@@ -62,7 +61,7 @@ load_firewall() {
 }
 
 # ============================================================
-# 自愈：nfqws2 崩溃自动重启
+# 健康检查循环：只管 nfqws2，不动 zapret2d
 # ============================================================
 health_loop() {
     while true; do
@@ -72,6 +71,7 @@ health_loop() {
             echo "[WARN] 健康检查失败，正在重启 nfqws2..."
             killall -9 nfqws2 2>/dev/null || true
             sleep 1
+            # 这里假设 zapret2_core_main 只负责 nfqws2，不再做锁之类的事
             zapret2_core_main &
         fi
     done
@@ -90,8 +90,10 @@ main() {
 
     load_firewall
 
+    # 启动 nfqws2
     zapret2_core_main &
 
+    # 健康循环
     health_loop
 }
 
