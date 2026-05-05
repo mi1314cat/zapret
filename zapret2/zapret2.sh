@@ -56,6 +56,9 @@ main_menu() {
         echo -e "${CYAN}15)${RESET} 运行 Blockcheck"
         echo -e "${CYAN}16)${RESET} 配置包处理数量（qnum/qsize）"
         echo -e "${CYAN}17)${RESET} 修复僵尸 PID 并重启 zapret2d"
+        echo -e "${CYAN}18)${RESET} 白名单管理（Zapret2 不处理）"
+        echo -e "${CYAN}19)${RESET} 黑名单管理（强制进入 Zapret2）"
+        echo -e "${CYAN}20)${RESET} 卸载 Zapret2（删除所有文件）"
         echo -e "${CYAN}0)${RESET} 退出"
         echo ""
 
@@ -79,6 +82,9 @@ main_menu() {
             15) bash "$MENU/blockcheck.sh" ;;
             16) bash "$MENU/packet.sh" ;;
             17) bash "$MENU/pidfix.sh" ;;
+            18) bash "$MENU/whitelist.sh" ;;
+            19) bash "$MENU/blacklist.sh" ;;
+            20) bash "$MENU/delete.sh" ;;
             0) exit 0 ;;
             *)
                 err "无效选择"
