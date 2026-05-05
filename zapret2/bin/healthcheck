@@ -1,72 +1,55 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - healthcheck
-# 健康检查：队列占用、卡死检测、资源监控
+# Zapret2 v7.0 - healthcheck（最终优化版）
+# 只检查 nfqws2，不检查 zapret2d，不触发锁
 # ============================================================
 
 set -euo pipefail
 
-BASE_DIR="/root/catmi/Zapret2"
-LIB_DIR="$BASE_DIR/lib"
+BASE="/root/catmi/Zapret2"
+LIB="$BASE/lib"
 
-source "$LIB_DIR/utils.sh"
+source "$LIB/utils.sh"
 
-NFQWS_BIN="$BASE_DIR/nfqws2"
-QUEUE_NUM=200
+NFQWS_BIN="$BASE/bin/nfqws2"
+QUEUE_NUM=100
 
 # ============================================================
-# 检查 nfqws2 是否在运行
+# 1. 检查 nfqws2 是否存活
 # ============================================================
 check_process() {
     if ! pgrep -x nfqws2 >/dev/null 2>&1; then
-        log_error "nfqws2 未运行"
+        echo "[HC] nfqws2 未运行"
         return 1
     fi
     return 0
 }
 
 # ============================================================
-# 检查 NFQUEUE 是否被占用
+# 2. 检查 NFQUEUE 是否正常绑定
 # ============================================================
 check_nfqueue() {
-    if ss -u -a | grep -q "nfqueue"; then
-        # 检查是否为 nfqws2 自己占用
-        local pid
-        pid=$(pgrep -x nfqws2 || true)
-
-        if [[ -z "$pid" ]]; then
-            log_error "NFQUEUE 被未知进程占用"
-            return 1
-        fi
-
-        # 如果 nfqws2 在运行，则视为正常
-        return 0
-    fi
-
-    # 如果 nfqws2 在运行但队列未占用 → 异常
-    if pgrep -x nfqws2 >/dev/null 2>&1; then
-        log_error "nfqws2 运行中但未占用 NFQUEUE"
+    # nfqws2 必须绑定 NFQUEUE
+    if ! ss -u -a | grep -q "nfqueue"; then
+        echo "[HC] NFQUEUE 未绑定"
         return 1
     fi
-
     return 0
 }
 
 # ============================================================
-# 检查 CPU 占用（卡死检测）
+# 3. 检查 CPU 是否卡死（长时间 0%）
 # ============================================================
 check_cpu() {
-    local pid
+    local pid cpu
     pid=$(pgrep -x nfqws2 || true)
 
-    [[ -z "$pid" ]] && return 0
+    [[ -z "$pid" ]] && return 1
 
-    local cpu
     cpu=$(ps -p "$pid" -o %cpu= | awk '{print int($1)}')
 
-    # 如果 CPU 长时间为 0 → 可能卡死
     if (( cpu == 0 )); then
-        log_warn "nfqws2 CPU 占用为 0，可能卡死"
+        echo "[HC] nfqws2 CPU 为 0%，可能卡死"
         return 1
     fi
 
@@ -74,20 +57,18 @@ check_cpu() {
 }
 
 # ============================================================
-# 检查内存泄漏
+# 4. 检查内存泄漏（>200MB）
 # ============================================================
 check_memory() {
-    local pid
+    local pid mem
     pid=$(pgrep -x nfqws2 || true)
 
-    [[ -z "$pid" ]] && return 0
+    [[ -z "$pid" ]] && return 1
 
-    local mem
     mem=$(ps -p "$pid" -o rss= | awk '{print int($1)}')
 
-    # 超过 200MB 视为异常
     if (( mem > 200000 )); then
-        log_warn "nfqws2 内存占用异常：${mem}KB"
+        echo "[HC] nfqws2 内存异常：${mem}KB"
         return 1
     fi
 
@@ -106,15 +87,12 @@ run_healthcheck() {
     check_memory    || status=1
 
     if (( status == 0 )); then
-        log_info "健康检查通过"
+        echo "[HC] OK"
     else
-        log_error "健康检查失败"
+        echo "[HC] FAIL"
     fi
 
     return "$status"
 }
 
-# ============================================================
-# 主入口
-# ============================================================
 run_healthcheck
