@@ -2,23 +2,23 @@
 set -euo pipefail
 
 BASE="/root/catmi/Zapret2"
-REPO="https://raw.githubusercontent.com/mi1314cat/zapret/main/zapret2"
+REPO_BASE="https://raw.githubusercontent.com/mi1314cat/zapret/main/zapret2"
 
 echo "============================================================"
-echo "🚀 Zapret2 v7.0 一键安装脚本（最终正式版）"
+echo "🚀 Zapret2 v7.0 一键安装脚本（整合修复版）"
 echo "============================================================"
 
 # ============================================================
-# 0. 架构判断（非 ARM64 → fallback）
+# 0. 架构判断（目前仍只标记 ARM64 为官方支持）
 # ============================================================
 ARCH=$(uname -m)
 
-echo "🔍 正在检测系统架构： $ARCH"
+echo "🔍 检测系统架构： $ARCH"
 
 if [[ "$ARCH" != "aarch64" ]]; then
-    echo -e "\e[33m⚠ 当前架构不是 ARM64，本项目仅支持 ARM64\e[0m"
-    echo -e "\e[33m⚠ 自动回退到 zapret（作者原版）安装脚本\e[0m"
-    bash <(curl -Ls https://raw.githubusercontent.com/bol-van/zapret/master/install_easy.sh)
+    echo -e "\e[33m⚠ 当前架构不是 ARM64，本封装仅在 ARM64 上测试过\e[0m"
+    echo -e "\e[33m⚠ 将自动回退到 zapret（作者原版）安装脚本\e[0m"
+    bash <(curl -H "Cache-Control: no-cache" -Ls https://raw.githubusercontent.com/bol-van/zapret/master/install_easy.sh)
     exit 0
 fi
 
@@ -29,7 +29,7 @@ echo ""
 # 1. 安装依赖
 # ============================================================
 apt update -y
-apt install -y git curl nftables iproute2
+apt install -y git curl nftables iproute2 build-essential pkg-config libmnl-dev libnetfilter-queue-dev
 
 # ============================================================
 # 2. 克隆仓库
@@ -65,9 +65,10 @@ mkdir -p /var/log/zapret2
 echo "✔ 目录结构 OK"
 
 # ============================================================
-# 5. 自动生成 utils.sh（防止缺失）
+# 5. 自动生成 utils.sh（兜底）
 # ============================================================
-cat >"$BASE/lib/utils.sh" <<'EOF'
+if [[ ! -f "$BASE/lib/utils.sh" ]]; then
+    cat >"$BASE/lib/utils.sh" <<'EOF'
 #!/usr/bin/env bash
 ok()    { echo -e "[\e[32mOK\e[0m] $*"; }
 warn()  { echo -e "[\e[33mWARN\e[0m] $*"; }
@@ -86,8 +87,8 @@ with_lock() {
     flock -u 9
 }
 EOF
-
-chmod +x "$BASE/lib/utils.sh"
+    chmod +x "$BASE/lib/utils.sh"
+fi
 echo "✔ utils.sh OK"
 
 # ============================================================
@@ -115,15 +116,19 @@ echo "✔ 默认配置 OK"
 # ============================================================
 # 7. 自动生成白名单 + hostlist/iplist
 # ============================================================
-bash "$BASE/Menu_options/autowhitelist.sh" --silent || true
-bash "$BASE/Menu_options/hostlist.sh" --silent || true
+if [[ -x "$BASE/Menu_options/auto_whitelist.sh" ]]; then
+    bash "$BASE/Menu_options/auto_whitelist.sh" --silent || true
+fi
+if [[ -x "$BASE/Menu_options/hostlist.sh" ]]; then
+    bash "$BASE/Menu_options/hostlist.sh" --silent || true
+fi
 
 echo "✔ 白名单/hostlist/iplist OK"
 
 # ============================================================
 # 8. 安装 systemd 服务
 # ============================================================
-curl -fsSL "$REPO/service/zapret2.service" -o /etc/systemd/system/zapret2.service
+curl -fsSL "$REPO_BASE/service/zapret2.service" -o /etc/systemd/system/zapret2.service
 systemctl daemon-reload
 
 echo "✔ systemd 服务 OK"
@@ -137,18 +142,39 @@ BUILD_SCRIPT="$BASE/bin/build_nfqws2.sh"
 echo "🔍 检查 nfqws2 是否存在..."
 
 if [[ ! -x "$NFQWS2" ]]; then
-    echo "⚠ 未找到 nfqws2，正在自动编译..."
+    echo "⚠ 未找到 nfqws2，尝试自动编译..."
 
-    if [[ -x "$BUILD_SCRIPT" ]]; then
-        bash "$BUILD_SCRIPT" || {
-            echo "❌ nfqws2 编译失败，自动回退到 zapret 作者原版脚本"
-            bash <(curl -Ls https://raw.githubusercontent.com/bol-van/zapret/master/install_easy.sh)
-            exit 0
-        }
-    else
-        echo "❌ 缺少 build_nfqws2.sh，无法编译"
-        echo "⚠ 自动回退到 zapret 作者原版脚本"
-        bash <(curl -Ls https://raw.githubusercontent.com/bol-van/zapret/master/install_easy.sh)
+    # 覆盖仓库里的 build_nfqws2.sh，确保是正确版本
+    cat >"$BUILD_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE="/root/catmi/Zapret2"
+BIN="$BASE/bin"
+BUILD_DIR="/tmp/zapret_build"
+
+echo "============================================================"
+echo "🔧 自动编译 nfqws2（修复版）"
+echo "============================================================"
+
+rm -rf "$BUILD_DIR"
+git clone --depth=1 https://github.com/bol-van/zapret "$BUILD_DIR"
+
+cd "$BUILD_DIR"
+
+echo "🔨 编译 nfqws2..."
+make nfqws2
+
+cp nfqws2 "$BIN/nfqws2"
+chmod +x "$BIN/nfqws2"
+
+echo "✔ nfqws2 编译完成：$BIN/nfqws2"
+EOF
+    chmod +x "$BUILD_SCRIPT"
+
+    if ! bash "$BUILD_SCRIPT"; then
+        echo "❌ nfqws2 编译失败，自动回退到 zapret 作者原版脚本"
+        bash <(curl -H "Cache-Control: no-cache" -Ls https://raw.githubusercontent.com/bol-van/zapret/master/install_easy.sh)
         exit 0
     fi
 else
@@ -158,17 +184,19 @@ fi
 # ============================================================
 # 10. 加载防火墙
 # ============================================================
-bash "$BASE/bin/firewallctl" clear || true
-bash "$BASE/bin/firewallctl" apply || true
+if [[ -x "$BASE/bin/firewallctl" ]]; then
+    bash "$BASE/bin/firewallctl" clear || true
+    bash "$BASE/bin/firewallctl" apply || true
+fi
 
 echo "✔ 防火墙 OK"
 
 # ============================================================
 # 11. 启动 zapret2d
 # ============================================================
-systemctl enable --now zapret2 || err "服务启动失败，请检查 zapret2d"
+systemctl enable --now zapret2 || echo "⚠ 服务启动失败，请检查 zapret2d 日志"
 
-echo "✔ zapret2 服务已启动"
+echo "✔ zapret2 服务已启动（如无报错）"
 
 # ============================================================
 # 12. 安装 catmiz CLI
@@ -185,6 +213,7 @@ echo "✔ catmiz 快捷方式 OK"
 # 13. 清理临时目录
 # ============================================================
 rm -rf /root/catmi/zapret || true
+rm -rf /tmp/zapret_build || true
 
 echo ""
 echo "============================================================"
