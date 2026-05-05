@@ -23,7 +23,7 @@
 # 🧩 如何安装面板？
 
 ```
-bash <(curl -Ls https://github.com/mi1314cat/zapret/raw/refs/heads/main/zapret.sh）
+bash <(curl -Ls https://github.com/mi1314cat/zapret/raw/refs/heads/main/zapret.sh)
 ```
 ---
 # 📦 目录结构
