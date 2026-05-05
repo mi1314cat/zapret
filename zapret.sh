@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 Panel v5.3（生产级稳定版 - Zero Downtime）
+# Zapret2 Panel 
 # 修复与优化：
 # - [安全] 移除 eval 解析策略，使用安全数组分割避免注入风险
 # - [过滤] 增强节点列表正则，精准适配 IPv6 CIDR 且过滤尾随空格
@@ -75,45 +75,47 @@ install_zapret2() {
   git clone "$REPO_URL" "$ZAPRET2_DIR"
   cd "$ZAPRET2_DIR" || { err "无法进入目录 $ZAPRET2_DIR"; exit 1; }
 
-  msg "${BLUE}正在编译 nfqws (如遇失败将保留现场)...${RESET}"
+  msg "${BLUE}正在编译 nfqws ...${RESET}"
+  # 清理旧产物确保不被干扰
+  make clean >/dev/null 2>&1
   if ! make; then
-    err "make 编译失败！请检查上方的依赖报错信息。"
-    err "已保留源码目录 $ZAPRET2_DIR 供排查。"
+    err "编译失败！请检查上方 gcc/ld 的报错日志。"
     exit 1
   fi
 
-  if [[ -x "nfqws" ]]; then
-    cp nfqws nfqws2
-  elif [[ -x "binaries/my/nfqws" ]]; then
-    cp binaries/my/nfqws nfqws2
-  elif ls binaries/*/nfqws >/dev/null 2>&1; then
-    cp $(ls binaries/*/nfqws | head -n 1) nfqws2
+  # 寻找并验证编译产物
+  local raw_bin=""
+  if [[ -x "nfqws/nfqws" ]]; then raw_bin="nfqws/nfqws"
+  elif [[ -x "nfqws" ]]; then raw_bin="nfqws"
+  elif ls binaries/my/nfqws >/dev/null 2>&1; then raw_bin="binaries/my/nfqws"
+  fi
+
+  if [[ -n "$raw_bin" ]] && verify_binary "$raw_bin"; then
+    cp -f "$raw_bin" "$ZAPRET2_DIR/nfqws2"
+    chmod +x "$ZAPRET2_DIR/nfqws2"
+    ok "二进制文件校验通过，已成功部署。"
   else
-    err "未找到编译好的 nfqws 程序！请手动检查编译日志。"
+    err "编译生成的二进制文件损坏或不兼容当前系统架构！"
+    err "请检查是否在非标准系统（如极其精简的 Alpine 或 架构不匹配的容器）中运行。"
     exit 1
   fi
 
   mkdir -p "$ZAPRET2_CFG" "$PROFILE_DIR"
-
-  cat > "$ZAPRET2_CFG/ports.conf" <<EOF
+  
+  # 初始化基础配置
+  [[ -f "$ZAPRET2_CFG/ports.conf" ]] || cat > "$ZAPRET2_CFG/ports.conf" <<EOF
 TCP4_PORTS="443,8443,7844"
 UDP4_PORTS="443,8443,7844"
 TCP6_PORTS="443,8443,7844"
 UDP6_PORTS="443,8443,7844"
 EOF
-
-  cat > "$ZAPRET2_CFG/pkt.conf" <<EOF
+  [[ -f "$ZAPRET2_CFG/pkt.conf" ]] || cat > "$ZAPRET2_CFG/pkt.conf" <<EOF
 TCP_PKT_OUT="9"
 TCP_PKT_IN="3"
 UDP_PKT_OUT="0"
 UDP_PKT_IN="0"
 EOF
-
-  cat > "$ZAPRET2_CFG/strategy.conf" <<EOF
---lua-desync=fake:blob=fake_default_tls:fooling=md5sig
---lua-desync=multisplit:pos=2
-EOF
-
+  [[ -f "$ZAPRET2_CFG/strategy.conf" ]] || echo "--lua-desync=fake:blob=fake_default_tls:fooling=md5sig" > "$ZAPRET2_CFG/strategy.conf"
   echo "local" > "$ZAPRET2_CFG/mode.conf"
 
   generate_run_script
@@ -123,8 +125,15 @@ EOF
   systemctl daemon-reload
   systemctl enable "$SERVICE"
   systemctl restart "$SERVICE"
+  
+  sleep 2
+  if ! systemctl is-active "$SERVICE" >/dev/null 2>&1; then
+    err "服务启动失败！正在输出最近日志..."
+    journalctl -u "$SERVICE" --no-pager -n 20
+    exit 1
+  fi
 
-  ok "Zapret2 安装与配置完成！核心路径：$ZAPRET2_DIR"
+  ok "Zapret2 v5.4 安装完成且验证成功！"
 }
 
 generate_run_script() {
