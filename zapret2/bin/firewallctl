@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - firewallctl（增强版）
-# 白名单 / 黑名单 / hostlist / iplist / qnum / IPv4+IPv6
+# Zapret2 v7.0 - firewallctl（终极版）
+# IPv4/IPv6 / qnum/qsize / hostlist/iplist / whitelist/blacklist
 # ============================================================
 
 set -euo pipefail
@@ -12,7 +12,6 @@ LIB="$BASE/lib"
 
 source "$LIB/utils.sh"
 
-BACKEND="nft"
 TABLE="zapret2"
 CHAIN="zapret2_chain"
 
@@ -23,14 +22,10 @@ IPLIST="$CFG/iplist.txt"
 QCONF="$CFG/qnum.conf"
 
 # ============================================================
-# 读取模式 / qnum / qsize
+# 读取配置
 # ============================================================
 get_mode() {
-    if [[ -f "$CFG/mode.conf" ]]; then
-        cat "$CFG/mode.conf"
-    else
-        echo "local"
-    fi
+    [[ -f "$CFG/mode.conf" ]] && cat "$CFG/mode.conf" || echo "local"
 }
 
 get_qnum() {
@@ -52,7 +47,7 @@ nft_clear() {
 # 自身保护（防自杀）
 # ============================================================
 apply_self_protection() {
-    log_info "[FW] 排除 zapret2 自身流量"
+    log_info "[FW] 自身保护规则加载中..."
 
     # 回环
     nft add rule inet "$TABLE" "$CHAIN" ip saddr 127.0.0.1 counter accept
@@ -60,25 +55,28 @@ apply_self_protection() {
     nft add rule inet "$TABLE" "$CHAIN" ip6 saddr ::1 counter accept
     nft add rule inet "$TABLE" "$CHAIN" ip6 daddr ::1 counter accept
 
-    # 本机地址（避免自吃）
+    # 本机所有 IPv4
     ip -4 addr show scope global | awk '/inet /{print $2}' | while read -r cidr; do
-        addr=${cidr%/*}
-        nft add rule inet "$TABLE" "$CHAIN" ip saddr "$addr" counter accept
-        nft add rule inet "$TABLE" "$CHAIN" ip daddr "$addr" counter accept
+        ip="${cidr%/*}"
+        nft add rule inet "$TABLE" "$CHAIN" ip saddr "$ip" counter accept
+        nft add rule inet "$TABLE" "$CHAIN" ip daddr "$ip" counter accept
     done
 
+    # 本机所有 IPv6
     ip -6 addr show scope global | awk '/inet6 /{print $2}' | while read -r cidr; do
-        addr=${cidr%/*}
-        nft add rule inet "$TABLE" "$CHAIN" ip6 saddr "$addr" counter accept
-        nft add rule inet "$TABLE" "$CHAIN" ip6 daddr "$addr" counter accept
+        ip="${cidr%/*}"
+        nft add rule inet "$TABLE" "$CHAIN" ip6 saddr "$ip" counter accept
+        nft add rule inet "$TABLE" "$CHAIN" ip6 daddr "$ip" counter accept
     done
+
+    ok "[FW] 自身保护规则已加载"
 }
 
 # ============================================================
-# 白名单（IP 段 / IP）
+# 白名单
 # ============================================================
 apply_whitelist() {
-    [[ ! -f "$WHITELIST" ]] && return 0
+    [[ ! -f "$WHITELIST" ]] && return
 
     while IFS= read -r line; do
         [[ -z "$line" || "$line" =~ ^# ]] && continue
@@ -96,10 +94,10 @@ apply_whitelist() {
 }
 
 # ============================================================
-# 黑名单（IP 段 / IP）
+# 黑名单
 # ============================================================
 apply_blacklist() {
-    [[ ! -f "$BLACKLIST" ]] && return 0
+    [[ ! -f "$BLACKLIST" ]] && return
 
     local qnum
     qnum="$(get_qnum)"
@@ -123,17 +121,15 @@ apply_blacklist() {
 # hostlist（域名 → set）
 # ============================================================
 apply_hostlist() {
-    [[ ! -f "$HOSTLIST" ]] && return 0
+    [[ ! -f "$HOSTLIST" ]] && return
 
     log_info "[FW] 加载 hostlist（域名）"
 
-    nft add set inet "$TABLE" hostlist '{ type inet_service; flags interval; }' 2>/dev/null || true
+    nft add set inet "$TABLE" hostlist '{ type string; flags interval; }' 2>/dev/null || true
 
     while IFS= read -r host; do
         [[ -z "$host" || "$host" =~ ^# ]] && continue
-        # 这里只是占位，真正基于 SNI/HTTP Host 的匹配在 nfqws2 里做
-        # 这里保留 set 以便后续扩展
-        :
+        nft add element inet "$TABLE" hostlist { "\"$host\"" } 2>/dev/null || true
     done < "$HOSTLIST"
 }
 
@@ -141,7 +137,7 @@ apply_hostlist() {
 # iplist（IP → set）
 # ============================================================
 apply_iplist() {
-    [[ ! -f "$IPLIST" ]] && return 0
+    [[ ! -f "$IPLIST" ]] && return
 
     log_info "[FW] 加载 iplist（IP）"
 
@@ -164,16 +160,14 @@ apply_default_rules() {
 
     log_info "[FW] 默认规则（mode=$mode, qnum=$qnum, qsize=$qsize）"
 
-    # 设置 NFQUEUE 队列大小（全局）
+    # 设置 NFQUEUE 队列大小
     sysctl -w net.netfilter.nf_queue_maxlen="$qsize" >/dev/null 2>&1 || true
 
     case "$mode" in
         local)
-            # 本机出站流量
             nft add rule inet "$TABLE" "$CHAIN" meta l4proto tcp counter queue num "$qnum"
             ;;
         gateway)
-            # 网关模式：转发 + 入站
             nft add rule inet "$TABLE" "$CHAIN" meta l4proto tcp counter queue num "$qnum"
             ;;
         *)
