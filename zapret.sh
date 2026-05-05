@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # Zapret2 v7.0 - 一键引导脚本（自动调用 GitHub zapret2.sh）
+# 包含：自动安装 + 自动配置 + 自动编译 + 自动修复 + 自动启动
 # ============================================================
 
 set -euo pipefail
@@ -93,7 +94,7 @@ create_if_missing "$BASE/config/mode.conf" "local"
 echo "配置文件 OK"
 
 # ============================================================
-# 5. 给脚本加执行权限
+# 5. 设置脚本执行权限
 # ============================================================
 echo "===> 设置脚本执行权限..."
 
@@ -127,15 +128,53 @@ systemctl daemon-reload
 echo "systemd OK"
 
 # ============================================================
-# 8. 加载防火墙
+# 8. 加载防火墙（第一次尝试）
 # ============================================================
 echo "===> 加载防火墙..."
 
-bash "$BASE/bin/firewallctl" apply || {
-    echo "防火墙加载失败，自动回退"
-    bash "$BASE/bin/firewallctl" clear
-    exit 1
-}
+if ! bash "$BASE/bin/firewallctl" apply; then
+    echo "❌ 防火墙加载失败，启动自动修复流程..."
+    
+    # ============================================================
+    # 自动修复（原 zapret2-fix.sh）
+    # ============================================================
+    echo "===> 自动修复：补齐配置 + 清理防火墙 + 重试加载"
+
+    mkdir -p $BASE/config
+    mkdir -p $BASE/config/nodes/{argo,tuic,hy2}
+
+    create_if_missing "$BASE/config/ports.conf" \
+'TCP4_PORTS="80,443"
+UDP4_PORTS="443"
+TCP6_PORTS="80,443"
+UDP6_PORTS="443"'
+
+    create_if_missing "$BASE/config/pkt.conf" \
+'TCP_PKT_IN="desync"
+TCP_PKT_OUT="desync"
+UDP_PKT_IN="none"
+UDP_PKT_OUT="none"'
+
+    create_if_missing "$BASE/config/strategy.conf" \
+'--tls-desync=fake
+--tls-sni="www.microsoft.com"
+--http-ua="Mozilla/5.0"
+--http-host="www.microsoft.com"
+--tls-sessionid=auto'
+
+    create_if_missing "$BASE/config/mode.conf" "local"
+
+    echo "===> 清理旧防火墙规则..."
+    bash "$BASE/bin/firewallctl" clear || true
+
+    echo "===> 再次加载防火墙规则..."
+    bash "$BASE/bin/firewallctl" apply || {
+        echo "❌ 自动修复失败，请检查 nft 是否正常工作"
+        exit 1
+    }
+
+    echo "自动修复成功！"
+fi
 
 echo "防火墙 OK"
 
