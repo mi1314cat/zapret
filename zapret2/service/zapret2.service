@@ -3,71 +3,66 @@ Description=Zapret2 v7.0 DPI Bypass Service
 After=network-online.target
 Wants=network-online.target
 
-# 防止重复启动
 StartLimitIntervalSec=30
 StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/root/catmi/Zapret2/bin/zapret2d
+WorkingDirectory=/root/catmi/Zapret2
 ExecStop=/bin/kill -TERM $MAINPID
 
-# 崩溃自动重启
 Restart=always
 RestartSec=2
 
-# Watchdog（zapret2d 会自动发送心跳）
 WatchdogSec=10
 NotifyAccess=all
 
-# 资源限制
 LimitNOFILE=65535
 LimitNPROC=4096
 
 # ================================
-# 安全沙箱（生产级）
+# 安全沙箱（优化后）
 # ================================
 
-# 文件系统保护
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-PrivateDevices=yes
+# 允许 zapret2d 访问自身目录（否则 226）
+ProtectSystem=full
+ReadWritePaths=/root/catmi/Zapret2
+ReadWritePaths=/var/log/zapret2
+
+# 允许访问 root 目录（否则无法读取配置）
+ProtectHome=read-only
+InaccessiblePaths=/home
+InaccessiblePaths=/srv
+
+# 允许访问 /tmp（nfqws2 需要）
+PrivateTmp=no
+
+# 允许访问 tun、netlink、proc
+PrivateDevices=no
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 
-# 禁止访问 /dev/shm、/dev/mqueue
-PrivateIPC=yes
+# IPC 不能隔离，否则 NFQUEUE 失败
+PrivateIPC=no
 
-# 禁止提权
-NoNewPrivileges=yes
+# 允许提权（否则 CAP_NET_ADMIN 无效）
+NoNewPrivileges=no
 
-# 限制网络族（只允许 IPv4/IPv6/NFQUEUE）
+# 网络族限制（保持安全）
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
 
-# 限制系统调用（最小化攻击面）
+# 系统调用过滤（保留 NFQUEUE 所需）
 SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources @mount @raw-io @reboot
+SystemCallFilter=~@mount @reboot
 
-# 限制能力（只保留 CAP_NET_ADMIN）
-CapabilityBoundingSet=CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN
+# 能力（NFQUEUE + iptables 必须）
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
-# 只允许写入日志目录
-ReadWritePaths=/var/log/zapret2
-
-# 禁止访问用户目录
-InaccessiblePaths=/home
-InaccessiblePaths=/root
-InaccessiblePaths=/srv
-
-# 禁止访问设备
 DevicePolicy=closed
 
-# ================================
-# 环境变量
-# ================================
 Environment=ZAPRET2_DIR=/root/catmi/Zapret2
 
 [Install]
