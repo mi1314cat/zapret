@@ -198,16 +198,18 @@ echo "✔ 服务 OK"
 # ============================================================
 # 9. 安装 catmiz CLI
 # ============================================================
-echo "===> 安装 catmiz CLI..."
+echo "===> 创建 catmiz 快捷方式..."
 
 cat >/usr/local/bin/catmiz <<'EOF'
 #!/usr/bin/env bash
-exec /root/catmi/Zapret2/zapret2.sh
+bash /root/catmi/Zapret2/zapret2.sh "$@"
 EOF
 
 chmod +x /usr/local/bin/catmiz
 
-echo "✔ catmiz OK"
+echo "✔ 快捷方式已创建：现在可以直接输入 catmiz 打开菜单"
+
+
 
 echo ""
 echo "============================================================"
