@@ -8,14 +8,14 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/root/catmi/Zapret2/bin/zapret2d
+ExecStart=/usr/bin/env bash /root/catmi/Zapret2/bin/zapret2d
 WorkingDirectory=/root/catmi/Zapret2
 ExecStop=/bin/kill -TERM $MAINPID
 
 Restart=always
 RestartSec=2
 
-# ❌ zapret2d 不支持 systemd-notify，必须关闭
+# zapret2d 是 Bash 守护脚本，不使用 systemd-notify
 WatchdogSec=0
 NotifyAccess=none
 
