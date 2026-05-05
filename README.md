@@ -64,7 +64,7 @@ zapret2/
 # 🧩 如何启动面板？
 
 ```
-bash /root/catmi/Zapret2/zapret2.sh
+bash <(curl -Ls https://github.com/mi1314cat/zapret/raw/refs/heads/main/zapret.sh）
 ```
 
 ---
