@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# ============================================================
-# Zapret2 v7.0 - 最终优化版一键安装脚本（不会卡死）
-# ============================================================
-
 set -euo pipefail
 
 BASE="/root/catmi/Zapret2"
@@ -40,23 +36,13 @@ fi
 echo "✔ 仓库 OK"
 
 # ============================================================
-# 2. 下载最新菜单 + 模块
+# 2. 下载最新 zapret2.sh（覆盖）
 # ============================================================
-echo "===> 下载最新菜单与模块..."
-
+echo "===> 下载最新 zapret2.sh..."
 curl -fsSL "$REPO/zapret2.sh" -o "$BASE/zapret2.sh"
 chmod +x "$BASE/zapret2.sh"
 
-mkdir -p "$BASE/Menu_options"
-curl -fsSL "$REPO/Menu_options.tar.gz" | tar -xz -C "$BASE"
-
-mkdir -p "$BASE/bin"
-curl -fsSL "$REPO/bin.tar.gz" | tar -xz -C "$BASE"
-
-mkdir -p "$BASE/lib"
-curl -fsSL "$REPO/lib.tar.gz" | tar -xz -C "$BASE"
-
-echo "✔ 菜单与模块 OK"
+echo "✔ 菜单 OK"
 
 # ============================================================
 # 3. 创建必要目录
@@ -117,7 +103,7 @@ create_if_missing "$BASE/config/strategy.d/02-microsoft.rule" \
 # 默认白名单
 create_if_missing "$BASE/config/whitelist.txt" ""
 
-# 默认黑名单（小白开箱即用）
+# 默认黑名单
 create_if_missing "$BASE/config/blacklist.txt" \
 'google.com
 youtube.com
@@ -181,9 +167,6 @@ chmod +x /usr/local/bin/catmiz
 
 echo "✔ catmiz OK"
 
-# ============================================================
-# 完成
-# ============================================================
 echo ""
 echo "============================================================"
 echo "🎉 Zapret2 v7.0 安装完成！"
