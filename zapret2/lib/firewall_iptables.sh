@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - firewall_iptables.sh
-# iptables 热交换（无重复挂载 + 无链污染）
+# Zapret2 v7.0 - firewall_iptables.sh (Optimized)
+# 无重复挂载 + 无链污染 + 防止 zapret2d 自杀
 # ============================================================
 
 set -euo pipefail
@@ -96,6 +96,18 @@ swap_chain() {
 
     # 创建 NEW 链
     $cmd -t mangle -N "$new"
+
+    # ================================
+    # 关键：排除 zapret2d 自身流量（防止自杀）
+    # ================================
+    $cmd -t mangle -A "$new" -m owner --uid-owner 0 -j RETURN
+
+    # 排除 loopback
+    $cmd -t mangle -A "$new" -i lo -j RETURN
+
+    # 排除 SSH
+    $cmd -t mangle -A "$new" -p tcp --sport 22 -j RETURN
+    $cmd -t mangle -A "$new" -p tcp --dport 22 -j RETURN
 
     # DNS 豁免
     $cmd -t mangle -A "$new" -p udp --dport 53 -j RETURN
