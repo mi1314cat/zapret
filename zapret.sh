@@ -182,7 +182,34 @@ systemctl enable --now zapret2 || {
     bash "$BASE/bin/firewallctl" clear
     exit 1
 }
+echo "===> 安装 catmiz CLI..."
 
+cat >/usr/local/bin/catmiz <<'EOF'
+#!/usr/bin/env bash
+
+ZAPRET="/root/catmi/Zapret2/zapret2.sh"
+SERVICE="zapret2"
+
+GREEN="\e[32m"
+RED="\e[31m"
+YELLOW="\e[33m"
+BLUE="\e[34m"
+RESET="\e[0m"
+
+help() {
+    echo -e "${BLUE}catmiz - Zapret2 v7.0 CLI 工具${RESET}"
+    echo ""
+    echo -e "${GREEN}用法：${RESET}"
+    echo "  catmiz                打开菜单"
+    echo "  catmiz status         查看服务状态"
+    echo "  catmiz restart        重启服务"
+    echo "  catmiz stop           停止服务"
+    echo "  catmiz start          启动服务"
+    echo "  catmiz logs           查看实时日志"
+    echo "  catmiz firewall       重新加载防火墙"
+    echo "  catmiz fix            自动修复（编译 + 防火墙 + 服务）"
+    echo "  catmiz build          重新编译 nfqws2 / zapret2d"
+}
 echo ""
 echo "============================================================"
 echo "🎉 Zapret2 v7.0 已成功启动！"
