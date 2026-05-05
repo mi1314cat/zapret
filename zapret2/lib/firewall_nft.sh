@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - firewall_nft.sh (Optimized)
+# Zapret2 v7.0 - firewall_nft.sh (Optimized + Fixed)
 # nftables 规则管理（无链污染 + 防止 zapret2d 自杀）
 # ============================================================
 
@@ -51,7 +51,11 @@ build_safe_sets() {
     )
 
     while IFS= read -r ip; do
-        [[ "$ip" =~ : ]] && SAFE_V6+=("$ip") || SAFE_V4+=("$ip")
+        if [[ "$ip" =~ : ]]; then
+            SAFE_V6+=("$ip")
+        else
+            SAFE_V4+=("$ip")
+        fi
     done < <(get_local_ips)
 
     SAFE_V4=($(printf '%s\n' "${SAFE_V4[@]}" | sort -u))
@@ -62,9 +66,10 @@ build_safe_sets() {
 # 清理旧表
 # ============================================================
 cleanup_table() {
-    nft list table inet "$TABLE_NAME" >/dev/null 2>&1 || return 0
-    nft flush table inet "$TABLE_NAME" || true
-    nft delete table inet "$TABLE_NAME" || true
+    if nft list table inet "$TABLE_NAME" >/dev/null 2>&1; then
+        nft flush table inet "$TABLE_NAME" || true
+        nft delete table inet "$TABLE_NAME" || true
+    fi
 }
 
 # ============================================================
@@ -85,15 +90,15 @@ create_table() {
 # 填充 SAFE 集合
 # ============================================================
 populate_safe_sets() {
-    local v4_list v6_list
-
     if ((${#SAFE_V4[@]})); then
+        local v4_list
         v4_list=$(printf '%s,' "${SAFE_V4[@]}")
         v4_list="${v4_list%,}"
         nft add element inet "$TABLE_NAME" safe_v4 { $v4_list }
     fi
 
     if ((${#SAFE_V6[@]})); then
+        local v6_list
         v6_list=$(printf '%s,' "${SAFE_V6[@]}")
         v6_list="${v6_list%,}"
         nft add element inet "$TABLE_NAME" safe_v6 { $v6_list }
@@ -101,52 +106,36 @@ populate_safe_sets() {
 }
 
 # ============================================================
-# 构建通用排除规则（防止 zapret2d 自杀）
+# 通用排除规则（防止 zapret2d 自杀）
 # ============================================================
 add_common_excludes() {
     local chain="$1"
 
-    # 排除 zapret2d 自身流量（UID 0）
     nft add rule inet "$TABLE_NAME" "$chain" meta skuid 0 return
-
-    # 排除 loopback
     nft add rule inet "$TABLE_NAME" "$chain" iifname "lo" return
     nft add rule inet "$TABLE_NAME" "$chain" oifname "lo" return
 
-    # 排除 SSH
     nft add rule inet "$TABLE_NAME" "$chain" tcp sport 22 return
     nft add rule inet "$TABLE_NAME" "$chain" tcp dport 22 return
 
-    # 排除 SAFE 列表
     nft add rule inet "$TABLE_NAME" "$chain" ip daddr @safe_v4 return
     nft add rule inet "$TABLE_NAME" "$chain" ip6 daddr @safe_v6 return
 
-    # DNS 豁免
     nft add rule inet "$TABLE_NAME" "$chain" udp dport 53 return
     nft add rule inet "$TABLE_NAME" "$chain" tcp dport 53 return
 }
 
 # ============================================================
-# 为链添加 NFQUEUE 规则
+# 添加 NFQUEUE 规则
 # ============================================================
 add_nfqueue_rules() {
     local chain="$1"
 
-    if [[ -n "${TCP4_PORTS:-}" ]]; then
-        nft add rule inet "$TABLE_NAME" "$chain" ip protocol tcp tcp dport { $TCP4_PORTS } queue num "$QUEUE_NUM" bypass
-    fi
+    [[ -n "${TCP4_PORTS:-}" ]] && nft add rule inet "$TABLE_NAME" "$chain" ip protocol tcp tcp dport { $TCP4_PORTS } queue num "$QUEUE_NUM" bypass
+    [[ -n "${UDP4_PORTS:-}" ]] && nft add rule inet "$TABLE_NAME" "$chain" ip protocol udp udp dport { $UDP4_PORTS } queue num "$QUEUE_NUM" bypass
 
-    if [[ -n "${UDP4_PORTS:-}" ]]; then
-        nft add rule inet "$TABLE_NAME" "$chain" ip protocol udp udp dport { $UDP4_PORTS } queue num "$QUEUE_NUM" bypass
-    fi
-
-    if [[ -n "${TCP6_PORTS:-}" ]]; then
-        nft add rule inet "$TABLE_NAME" "$chain" ip6 nexthdr tcp tcp dport { $TCP6_PORTS } queue num "$QUEUE_NUM" bypass
-    fi
-
-    if [[ -n "${UDP6_PORTS:-}" ]]; then
-        nft add rule inet "$TABLE_NAME" "$chain" ip6 nexthdr udp udp dport { $UDP6_PORTS } queue num "$QUEUE_NUM" bypass
-    fi
+    [[ -n "${TCP6_PORTS:-}" ]] && nft add rule inet "$TABLE_NAME" "$chain" ip6 nexthdr tcp tcp dport { $TCP6_PORTS } queue num "$QUEUE_NUM" bypass
+    [[ -n "${UDP6_PORTS:-}" ]] && nft add rule inet "$TABLE_NAME" "$chain" ip6 nexthdr udp udp dport { $UDP6_PORTS } queue num "$QUEUE_NUM" bypass
 }
 
 # ============================================================
@@ -162,7 +151,6 @@ apply_nft_rules() {
     create_table
     populate_safe_sets
 
-    # OUTPUT（Local）
     add_common_excludes "zapret2_out"
     add_nfqueue_rules "zapret2_out"
 
