@@ -1,456 +1,197 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - 小白引导式菜单（终极版）
-# - 一键安装 / 启动 / 停止 / 重启 / 实时日志
-# - 节点管理（自动编号）
-# - 自动生成 hostlist/iplist
-# - Blockcheck
-# - 配置包处理数量
-# - 防火墙管理
-# - 健康检查（CPU=0 / NFQUEUE / 僵尸 PID）
-# - 僵尸 PID 修复
+# Zapret2 v7.0 - 一键引导脚本（自动调用 GitHub zapret2.sh）
+# 包含：自动安装 + 自动配置 + 自动编译 + 自动修复 + 自动切换 iptables
 # ============================================================
 
 set -euo pipefail
 
-# ================================
-# 彩色定义
-# ================================
-RED="\e[31m"
-GREEN="\e[32m"
-YELLOW="\e[33m"
-BLUE="\e[34m"
-MAGENTA="\e[35m"
-CYAN="\e[36m"
-WHITE="\e[97m"
-BOLD="\e[1m"
-RESET="\e[0m"
-
-ok()    { echo -e "${GREEN}[✔]${RESET} $1"; }
-err()   { echo -e "${RED}[✘]${RESET} $1"; }
-warn()  { echo -e "${YELLOW}[!]${RESET} $1"; }
-info()  { echo -e "${CYAN}[i]${RESET} $1"; }
-
-title() {
-    echo -e "${MAGENTA}${BOLD}"
-    echo "╔══════════════════════════════════════════════╗"
-    printf "║ %-42s ║\n" "$1"
-    echo "╚══════════════════════════════════════════════╝"
-    echo -e "${RESET}"
-}
-
 BASE="/root/catmi/Zapret2"
-BIN="$BASE/bin"
-CFG="$BASE/config"
-PIDFILE="/run/zapret2.pid"
-SERVICE="zapret2"
+REPO_RAW="https://raw.githubusercontent.com/mi1314cat/zapret/main/zapret2"
 
-pause() {
-    echo ""
-    read -rp "按回车继续..."
+echo "===> Zapret2 v7.0 一键引导脚本"
+echo "===> 自动下载并调用 GitHub 菜单 zapret2.sh"
+
+# ============================================================
+# 0. 自动检测 nft 是否可用
+# ============================================================
+echo "===> 检查 nft 原子加载能力..."
+
+echo "table inet test { chain c { type filter hook input priority 0; } }" > /tmp/test.nft
+if ! nft -f /tmp/test.nft >/dev/null 2>&1; then
+    echo "❌ nft 原子加载失败，系统不支持 nft 模式"
+    echo "===> 自动切换到 iptables-legacy 模式..."
+
+    update-alternatives --set iptables /usr/sbin/iptables-legacy || true
+    update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy || true
+
+    echo "===> 已切换到 iptables-legacy"
+else
+    echo "nft 原子加载正常，继续使用 nft 模式"
+fi
+
+# ============================================================
+# 1. 克隆仓库（如果不存在）
+# ============================================================
+if [[ ! -d "$BASE" ]]; then
+    echo "===> 未找到 $BASE，正在克隆仓库..."
+
+    mkdir -p /root/catmi
+    cd /root/catmi
+
+    git clone https://github.com/mi1314cat/zapret || {
+        echo "GitHub 克隆失败"
+        exit 1
+    }
+
+    mv zapret/zapret2 Zapret2
+    echo "===> 仓库已克隆到 /root/catmi/Zapret2"
+fi
+
+# ============================================================
+# 2. 下载最新 zapret2.sh 菜单
+# ============================================================
+echo "===> 下载最新 zapret2.sh 菜单..."
+
+curl -fsSL "$REPO_RAW/zapret2.sh" -o "$BASE/zapret2.sh" || {
+    echo "下载 zapret2.sh 失败"
+    exit 1
 }
 
-# ================================
-# 一键安装
-# ================================
-onekey_install() {
-    title "一键安装"
+chmod +x "$BASE/zapret2.sh"
 
-    bash "$BASE/zapret2.sh" install || true
-    systemctl enable --now "$SERVICE" || true
+echo "菜单 OK"
 
-    ok "安装完成！Zapret2 已启动"
-    pause
-}
+# ============================================================
+# 3. 创建必要目录
+# ============================================================
+echo "===> 创建必要目录..."
 
-# ================================
-# 启动 / 停止 / 重启 / 日志
-# ================================
-start_service() {
-    systemctl start "$SERVICE"
-    ok "Zapret2 已启动"
-    pause
-}
+mkdir -p $BASE/config
+mkdir -p $BASE/config/nodes/{argo,tuic,hy2}
+mkdir -p $BASE/logs
 
-stop_service() {
-    systemctl stop "$SERVICE"
-    ok "Zapret2 已停止"
-    pause
-}
+echo "目录结构 OK"
 
-restart_service() {
-    systemctl restart "$SERVICE"
-    ok "Zapret2 已重启"
-    pause
-}
+# ============================================================
+# 4. 自动生成默认配置（如果不存在）
+# ============================================================
+echo "===> 检查配置文件..."
 
-show_logs() {
-    title "实时日志（Ctrl+C 退出）"
-    journalctl -fu "$SERVICE"
-}
+create_if_missing() {
+    local file="$1"
+    local content="$2"
 
-# ================================
-# 切换模式
-# ================================
-switch_mode() {
-    title "切换模式"
-
-    echo "当前模式：$(cat "$CFG/mode.conf")"
-    echo ""
-    echo "1) local"
-    echo "2) gateway"
-    read -rp "选择：" n
-
-    case "$n" in
-        1) echo "local" > "$CFG/mode.conf" ;;
-        2) echo "gateway" > "$CFG/mode.conf" ;;
-        *) err "无效选择"; pause; return ;;
-    esac
-
-    ok "模式已切换为：$(cat "$CFG/mode.conf")"
-    bash "$BIN/firewallctl" apply || true
-    systemctl restart "$SERVICE" || true
-    pause
-}
-
-# ================================
-# 节点管理（自动编号）
-# ================================
-node_menu() {
-    while true; do
-        clear
-        title "节点管理"
-
-        echo -e "${CYAN}编号 | 地址 | 端口${RESET}"
-        echo "----------------------------------------"
-
-        idx=1
-        for f in "$CFG/nodes"/*.node; do
-            [[ -f "$f" ]] || continue
-            host=$(grep '^host=' "$f" | cut -d= -f2)
-            port=$(grep '^port=' "$f" | cut -d= -f2)
-
-            printf "${GREEN}%02d${RESET}) %-25s ${YELLOW}%s${RESET}\n" \
-                "$idx" "$host" "$port"
-
-            idx=$((idx + 1))
-        done
-
-        echo "----------------------------------------"
-        echo ""
-        echo "1) 添加节点"
-        echo "2) 删除节点"
-        echo "0) 返回"
-        echo ""
-
-        read -rp "选择：" choice
-
-        case "$choice" in
-            1)
-                read -rp "请输入节点地址（IP 或域名）：" host
-                read -rp "请输入端口：" port
-
-                num=$(ls "$CFG/nodes"/*.node 2>/dev/null | wc -l)
-                num=$((num + 1))
-                file="$CFG/nodes/$(printf "%02d" "$num").node"
-
-                cat > "$file" <<EOF
-host=$host
-port=$port
-EOF
-
-                ok "节点已添加：$host:$port"
-                sleep 1
-                ;;
-
-            2)
-                read -rp "请输入要删除的编号：" del
-                file="$CFG/nodes/$(printf "%02d" "$del").node"
-
-                if [[ -f "$file" ]]; then
-                    rm -f "$file"
-                    ok "已删除节点编号 $del"
-                else
-                    err "节点编号不存在"
-                fi
-                sleep 1
-                ;;
-
-            0) return ;;
-            *) err "无效选择"; sleep 1 ;;
-        esac
-    done
-}
-
-# ================================
-# 自动生成 hostlist/iplist
-# ================================
-generate_hostlist() {
-    title "生成 hostlist/iplist"
-
-    > "$CFG/hostlist.txt"
-    > "$CFG/iplist.txt"
-
-    for f in "$CFG/nodes"/*.node; do
-        [[ -f "$f" ]] || continue
-        host=$(grep '^host=' "$f" | cut -d= -f2)
-
-        if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "$host" >> "$CFG/iplist.txt"
-        else
-            echo "$host" >> "$CFG/hostlist.txt"
-        fi
-    done
-
-    ok "hostlist/iplist 已生成"
-    pause
-}
-
-# ================================
-# Blockcheck
-# ================================
-run_blockcheck() {
-    title "运行 Blockcheck"
-    bash "$BASE/bin/blockcheck"
-    pause
-}
-
-# ================================
-# 配置包处理数量
-# ================================
-set_packet_config() {
-    title "配置包处理数量"
-
-    read -rp "NFQUEUE 队列号（默认 200）：" qnum
-    read -rp "队列大小（默认 4096）：" qsize
-
-    echo "QNUM=${qnum:-200}" > "$CFG/pkt.conf"
-    echo "QSIZE=${qsize:-4096}" >> "$CFG/pkt.conf"
-
-    ok "包处理数量已更新"
-    pause
-}
-
-# ================================
-# 防火墙管理
-# ================================
-firewall_menu() {
-    title "防火墙管理"
-
-    echo "1) 加载防火墙"
-    echo "2) 清理防火墙"
-    echo "0) 返回"
-    read -rp "选择：" f
-
-    case "$f" in
-        1) bash "$BIN/firewallctl" apply; pause ;;
-        2) bash "$BIN/firewallctl" clear; pause ;;
-        0) return ;;
-        *) err "无效选择"; pause ;;
-    esac
-}
-
-# ================================
-# 僵尸 PID 修复
-# ================================
-fix_zombie_pid() {
-    title "修复 zapret2d 僵尸 PID"
-
-    if [[ -f "$PIDFILE" ]]; then
-        pid=$(cat "$PIDFILE")
-        if [[ -n "$pid" && ! -d "/proc/$pid" ]]; then
-            warn "检测到僵尸 PID 文件：$PIDFILE (PID=$pid 不存在)"
-            rm -f "$PIDFILE"
-            ok "已删除僵尸 PID 文件"
-        else
-            info "PID 文件存在且进程正常，无需修复"
-        fi
-    else
-        info "没有 PID 文件，无需修复"
-    fi
-
-    systemctl reset-failed "$SERVICE" || true
-    bash "$BIN/firewallctl" clear || true
-    systemctl restart "$SERVICE" || true
-
-    ok "zapret2d 已重新启动"
-    pause
-}
-
-# ================================
-# 健康检查（CPU=0 / NFQUEUE / 僵尸 PID）
-# ================================
-get_zapret_pid() {
-    if [[ -f "$PIDFILE" ]]; then
-        cat "$PIDFILE"
-    else
-        pgrep -x zapret2d || true
+    if [[ ! -f "$file" ]]; then
+        echo "创建默认配置：$file"
+        echo "$content" > "$file"
     fi
 }
 
-check_zombie_only() {
-    if [[ -f "$PIDFILE" ]]; then
-        pid=$(cat "$PIDFILE")
-        if [[ -n "$pid" && ! -d "/proc/$pid" ]]; then
-            warn "检测到僵尸 PID 文件：$PIDFILE (PID=$pid 不存在)"
-            rm -f "$PIDFILE"
-            ok "已删除僵尸 PID 文件"
-        fi
-    fi
+create_if_missing "$BASE/config/ports.conf" \
+'TCP4_PORTS="80,443"
+UDP4_PORTS="443"
+TCP6_PORTS="80,443"
+UDP6_PORTS="443"'
+
+create_if_missing "$BASE/config/pkt.conf" \
+'TCP_PKT_IN="desync"
+TCP_PKT_OUT="desync"
+UDP_PKT_IN="none"
+UDP_PKT_OUT="none"'
+
+create_if_missing "$BASE/config/strategy.conf" \
+'--tls-desync=fake
+--tls-sni="www.microsoft.com"
+--http-ua="Mozilla/5.0"
+--http-host="www.microsoft.com"
+--tls-sessionid=auto'
+
+create_if_missing "$BASE/config/mode.conf" "local"
+
+echo "配置文件 OK"
+
+# ============================================================
+# 5. 设置脚本执行权限
+# ============================================================
+echo "===> 设置脚本执行权限..."
+
+chmod +x $BASE/bin/* || true
+chmod +x $BASE/zapret2.sh || true
+
+echo "权限 OK"
+
+# ============================================================
+# 6. 编译 nfqws2（自动调用 smart_build）
+# ============================================================
+echo "===> 编译 nfqws2..."
+
+if [[ ! -f "$BASE/bin/nfqws2" ]]; then
+    bash "$BASE/lib/smart_build.sh" || {
+        echo "编译失败，自动回退"
+        exit 1
+    }
+fi
+
+echo "nfqws2 OK"
+
+# ============================================================
+# 7. 安装 systemd 服务
+# ============================================================
+echo "===> 安装 systemd 服务..."
+
+cp "$BASE/service/zapret2.service" /etc/systemd/system/
+systemctl daemon-reload
+
+echo "systemd OK"
+
+# ============================================================
+# 8. 加载防火墙（第一次尝试）
+# ============================================================
+echo "===> 加载防火墙..."
+
+if ! bash "$BASE/bin/firewallctl" apply; then
+    echo "❌ 防火墙加载失败，启动自动修复流程..."
+
+    echo "===> 自动切换到 iptables-legacy（再次确认）"
+    update-alternatives --set iptables /usr/sbin/iptables-legacy || true
+    update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy || true
+
+    echo "===> 清理旧防火墙规则..."
+    bash "$BASE/bin/firewallctl" clear || true
+
+    echo "===> 再次加载防火墙规则..."
+    bash "$BASE/bin/firewallctl" apply || {
+        echo "❌ 自动修复失败，请检查系统 iptables/nft 环境"
+        exit 1
+    }
+
+    echo "自动修复成功！"
+fi
+
+echo "防火墙 OK"
+
+# ============================================================
+# 9. 启动 zapret2d
+# ============================================================
+echo "===> 启动 zapret2d..."
+
+systemctl enable --now zapret2 || {
+    echo "服务启动失败，自动回退"
+    systemctl stop zapret2
+    bash "$BASE/bin/firewallctl" clear
+    exit 1
 }
 
-check_cpu_stall() {
-    local pid="$1"
-    local samples=3
-    local sleep_sec=2
-    local zero_count=0
-
-    [[ -z "$pid" ]] && return 1
-
-    for _ in $(seq 1 "$samples"); do
-        cpu=$(ps -p "$pid" -o %cpu= 2>/dev/null | awk '{print int($1)}' || echo 0)
-        if [[ "$cpu" -le 0 ]]; then
-            zero_count=$((zero_count + 1))
-        fi
-        sleep "$sleep_sec"
-    done
-
-    if [[ "$zero_count" -ge "$samples" ]]; then
-        warn "检测到 zapret2d CPU 长期为 0，疑似卡死 (PID=$pid)"
-        return 1
-    fi
-
-    ok "zapret2d CPU 正常 (PID=$pid)"
-    return 0
-}
-
-check_nfqueue() {
-    if command -v iptables >/dev/null 2>&1; then
-        if iptables -t mangle -S 2>/dev/null | grep -q "NFQUEUE"; then
-            if [[ -f /proc/net/netfilter/nfnetlink_queue ]]; then
-                qlines=$(wc -l < /proc/net/netfilter/nfnetlink_queue || echo 0)
-                if [[ "$qlines" -eq 0 ]]; then
-                    warn "NFQUEUE 规则存在，但队列为空，可能未正常工作"
-                else
-                    ok "NFQUEUE 队列存在 ($qlines 行)"
-                fi
-            else
-                warn "未找到 /proc/net/netfilter/nfnetlink_queue，无法检测队列"
-            fi
-        else
-            warn "未检测到 NFQUEUE 规则（可能未加载防火墙）"
-        fi
-    fi
-}
-
-restart_zapret2_health() {
-    warn "准备清理防火墙并重启 zapret2d..."
-
-    if [[ -x "$BIN/firewallctl" ]]; then
-        "$BIN/firewallctl" clear || true
-    fi
-
-    systemctl reset-failed "$SERVICE" || true
-    systemctl restart "$SERVICE"
-
-    ok "zapret2d 已重启"
-}
-
-health_check() {
-    title "Zapret2 健康检查"
-
-    check_zombie_only
-
-    pid=$(get_zapret_pid || true)
-
-    if [[ -z "$pid" ]]; then
-        warn "未找到 zapret2d 进程，尝试重启..."
-        restart_zapret2_health
-        pause
-        return
-    fi
-
-    if ! kill -0 "$pid" 2>/dev/null; then
-        warn "zapret2d PID=$pid 不存在，尝试重启..."
-        restart_zapret2_health
-        pause
-        return
-    fi
-
-    if ! check_cpu_stall "$pid"; then
-        restart_zapret2_health
-        pause
-        return
-    fi
-
-    check_nfqueue
-
-    ok "健康检查完成，无需操作"
-    pause
-}
-
-# ================================
-# 主菜单
-# ================================
-main_menu() {
-    while true; do
-        clear
-        title "Zapret2 v7.0 小白引导菜单"
-
-        if systemctl is-active --quiet "$SERVICE"; then
-            status="${GREEN}运行中${RESET}"
-        else
-            status="${RED}未运行${RESET}"
-        fi
-
-        echo -e "服务状态：$status"
-        echo -e "当前模式：${YELLOW}$(cat "$CFG/mode.conf")${RESET}"
-        echo ""
-
-        echo -e "${CYAN}1)${RESET} 一键安装"
-        echo -e "${CYAN}2)${RESET} 查看运行状态"
-        echo -e "${CYAN}3)${RESET} 启动 Zapret2"
-        echo -e "${CYAN}4)${RESET} 停止 Zapret2"
-        echo -e "${CYAN}5)${RESET} 重启 Zapret2"
-        echo -e "${CYAN}6)${RESET} 实时日志"
-        echo -e "${CYAN}7)${RESET} 切换模式"
-        echo -e "${CYAN}8)${RESET} 修改策略"
-        echo -e "${CYAN}9)${RESET} 修改端口"
-        echo -e "${CYAN}10)${RESET} 节点管理"
-        echo -e "${CYAN}11)${RESET} 防火墙管理"
-        echo -e "${CYAN}12)${RESET} 健康检查（CPU/NFQUEUE/PID）"
-        echo -e "${CYAN}13)${RESET} 一键修复（原有 fix）"
-        echo -e "${CYAN}14)${RESET} 生成 hostlist/iplist"
-        echo -e "${CYAN}15)${RESET} 运行 Blockcheck"
-        echo -e "${CYAN}16)${RESET} 配置包处理数量"
-        echo -e "${CYAN}17)${RESET} 修复僵尸 PID 并重启 zapret2d"
-        echo -e "${CYAN}0)${RESET} 退出"
-        echo ""
-
-        read -rp "请输入数字：" choice
-
-        case "$choice" in
-            1) onekey_install ;;
-            2) systemctl status "$SERVICE"; pause ;;
-            3) start_service ;;
-            4) stop_service ;;
-            5) restart_service ;;
-            6) show_logs ;;
-            7) switch_mode ;;
-            8) nano "$CFG/strategy.conf"; pause ;;
-            9) nano "$CFG/ports.conf"; pause ;;
-            10) node_menu ;;
-            11) firewall_menu ;;
-            12) health_check ;;
-            13) bash "$BASE/zapret2.sh" fix; pause ;;
-            14) generate_hostlist ;;
-            15) run_blockcheck ;;
-            16) set_packet_config ;;
-            17) fix_zombie_pid ;;
-            0) exit 0 ;;
-            *) err "无效选择"; pause ;;
-        esac
-    done
-}
-
-main_menu
+echo ""
+echo "============================================================"
+echo "🎉 Zapret2 v7.0 已成功启动！"
+echo "你现在可以使用 GitHub 菜单："
+echo ""
+echo "    /root/catmi/Zapret2/zapret2.sh"
+echo ""
+echo "例如："
+echo "    zapret2.sh status"
+echo "    zapret2.sh strategy edit"
+echo "    zapret2.sh mode gateway"
+echo "============================================================"
