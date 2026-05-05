@@ -45,6 +45,48 @@ chmod +x "$BASE/zapret2.sh"
 echo "✔ 菜单 OK"
 
 # ============================================================
+# X. 自动修复 zapret2.sh（防止递归 / 覆盖）
+# ============================================================
+echo "===> 检查 zapret2.sh 是否损坏..."
+
+ZFILE="$BASE/zapret2.sh"
+ZREPO="$REPO/zapret2.sh"
+
+fix_zapret2() {
+    echo "===> 正在恢复 zapret2.sh..."
+    curl -fsSL "$ZREPO" -o "$ZFILE"
+    chmod +x "$ZFILE"
+    echo "✔ zapret2.sh 已恢复"
+}
+
+# 1. 文件不存在
+if [[ ! -f "$ZFILE" ]]; then
+    echo "❌ zapret2.sh 不存在"
+    fix_zapret2
+fi
+
+# 2. 检查是否是递归版本（exec 自己）
+if grep -qE '^exec .+zapret2\.sh' "$ZFILE"; then
+    echo "❌ 检测到 zapret2.sh 是递归版本（exec 自己）"
+    fix_zapret2
+fi
+
+# 3. 检查是否过短（被覆盖）
+LINE_COUNT=$(wc -l < "$ZFILE")
+if [[ "$LINE_COUNT" -lt 20 ]]; then
+    echo "❌ zapret2.sh 内容异常（行数过少：$LINE_COUNT）"
+    fix_zapret2
+fi
+
+# 4. 检查是否缺少 main_menu
+if ! grep -q "main_menu" "$ZFILE"; then
+    echo "❌ zapret2.sh 缺少 main_menu，可能损坏"
+    fix_zapret2
+fi
+
+echo "✔ zapret2.sh 正常"
+
+# ============================================================
 # 3. 创建必要目录
 # ============================================================
 mkdir -p "$BASE/config"
