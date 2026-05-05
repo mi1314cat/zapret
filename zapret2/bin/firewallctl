@@ -80,7 +80,7 @@ cleanup_rules() {
 apply_rules() {
     local mode
     mode=$(cat "$CFG_DIR/mode.conf" 2>/dev/null || echo "local")
-
+  bash "/root/catmi/Zapret2/Menu_options/auto_whitelist.sh" --silent || true
     local backend
     backend=$(detect_backend)
 
