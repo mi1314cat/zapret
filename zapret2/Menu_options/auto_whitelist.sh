@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 自动把节点 + 本地地址加入白名单
 
-#!/usr/bin/env bash
+
 
 # 1. 先处理静默模式
 SILENT=0
