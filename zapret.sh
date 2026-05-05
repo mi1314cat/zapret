@@ -5,24 +5,21 @@ BASE="/root/catmi/Zapret2"
 REPO_BASE="https://raw.githubusercontent.com/mi1314cat/zapret/main/zapret2"
 
 echo "============================================================"
-echo "🚀 Zapret2 v7.0 一键安装脚本（整合修复版）"
+echo "🚀 Zapret2 v7.0 一键安装脚本（最终优化版，无需编译 nfqws2）"
 echo "============================================================"
 
 # ============================================================
-# 0. 架构判断（目前仍只标记 ARM64 为官方支持）
+# 0. 架构判断
 # ============================================================
 ARCH=$(uname -m)
-
 echo "🔍 检测系统架构： $ARCH"
 
-if [[ "$ARCH" != "aarch64" ]]; then
-    echo -e "\e[33m⚠ 当前架构不是 ARM64，本封装仅在 ARM64 上测试过\e[0m"
-    echo -e "\e[33m⚠ 将自动回退到 zapret（作者原版）安装脚本\e[0m"
-    bash <(curl -H "Cache-Control: no-cache" -Ls https://raw.githubusercontent.com/bol-van/zapret/master/install_easy.sh)
-    exit 0
+if [[ "$ARCH" != "aarch64" && "$ARCH" != "x86_64" ]]; then
+    echo -e "\e[31m❌ 不支持的架构：$ARCH\e[0m"
+    exit 1
 fi
 
-echo -e "\e[32m✔ ARM64 架构检测通过，继续安装 Zapret2 v7.0\e[0m"
+echo -e "\e[32m✔ 架构检测通过：$ARCH\e[0m"
 echo ""
 
 # ============================================================
@@ -134,51 +131,36 @@ systemctl daemon-reload
 echo "✔ systemd 服务 OK"
 
 # ============================================================
-# 9. 自动检测 nfqws2（不存在 → 自动编译）
+# 9. 自动下载 nfqws2（无需编译）
 # ============================================================
 NFQWS2="$BASE/bin/nfqws2"
-BUILD_SCRIPT="$BASE/bin/build_nfqws2.sh"
 
 echo "🔍 检查 nfqws2 是否存在..."
 
 if [[ ! -x "$NFQWS2" ]]; then
-    echo "⚠ 未找到 nfqws2，尝试自动编译..."
+    echo "⚠ 未找到 nfqws2，开始从 GitHub Releases 下载..."
 
-    # 覆盖仓库里的 build_nfqws2.sh，确保是正确版本
-    cat >"$BUILD_SCRIPT" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
+    case "$ARCH" in
+        aarch64)
+            DOWNLOAD_URL="https://github.com/mi1314cat/zapret/releases/download/nfqws2/nfqws2_aarch64"
+            ;;
+        x86_64)
+            DOWNLOAD_URL="https://github.com/mi1314cat/zapret/releases/download/nfqws2/nfqws2_amd"
+            ;;
+    esac
 
-BASE="/root/catmi/Zapret2"
-BIN="$BASE/bin"
-BUILD_DIR="/tmp/zapret_build"
+    mkdir -p "$BASE/bin"
+    curl -L --fail "$DOWNLOAD_URL" -o "$NFQWS2"
 
-echo "============================================================"
-echo "🔧 自动编译 nfqws2（修复版）"
-echo "============================================================"
+    if [[ ! -s "$NFQWS2" ]]; then
+        echo -e "\e[31m❌ 下载失败：$DOWNLOAD_URL\e[0m"
+        exit 1
+    fi
 
-rm -rf "$BUILD_DIR"
-git clone --depth=1 https://github.com/bol-van/zapret "$BUILD_DIR"
-
-cd "$BUILD_DIR"
-
-echo "🔨 编译 nfqws2..."
-make nfqws2
-
-cp nfqws2 "$BIN/nfqws2"
-chmod +x "$BIN/nfqws2"
-
-echo "✔ nfqws2 编译完成：$BIN/nfqws2"
-EOF
-    chmod +x "$BUILD_SCRIPT"
-
-    if ! bash "$BUILD_SCRIPT"; then
-    echo "❌ nfqws2 编译失败，请手动检查 /tmp/zapret2_build/nfq2 下的编译日志"
-    exit 1
-fi
-
+    chmod +x "$NFQWS2"
+    echo -e "\e[32m✔ nfqws2 下载完成：$NFQWS2\e[0m"
 else
-    echo "✔ nfqws2 已存在，跳过编译"
+    echo "✔ nfqws2 已存在，跳过下载"
 fi
 
 # ============================================================
