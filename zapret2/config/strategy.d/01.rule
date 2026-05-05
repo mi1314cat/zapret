@@ -1,0 +1,5 @@
+--tls-desync=fake
+--tls-sni=www.cloudflare.com
+--http-ua="Mozilla/5.0"
+--http-host=www.cloudflare.com
+--tls-sessionid=auto
