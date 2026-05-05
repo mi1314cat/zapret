@@ -210,6 +210,43 @@ help() {
     echo "  catmiz fix            自动修复（编译 + 防火墙 + 服务）"
     echo "  catmiz build          重新编译 nfqws2 / zapret2d"
 }
+
+case "$1" in
+    "" )
+        exec "$ZAPRET"
+        ;;
+    status )
+        systemctl status "$SERVICE"
+        ;;
+    restart )
+        systemctl restart "$SERVICE"
+        ;;
+    stop )
+        systemctl stop "$SERVICE"
+        ;;
+    start )
+        systemctl start "$SERVICE"
+        ;;
+    logs )
+        journalctl -u "$SERVICE" -f
+        ;;
+    firewall )
+        /root/catmi/Zapret2/bin/firewallctl clear
+        /root/catmi/Zapret2/bin/firewallctl apply
+        ;;
+    fix )
+        /root/catmi/Zapret2/bin/fix
+        ;;
+    build )
+        bash /root/catmi/Zapret2/lib/smart_build.sh
+        ;;
+    * )
+        help
+        ;;
+esac
+EOF
+
+chmod +x /usr/local/bin/catmiz
 echo ""
 echo "============================================================"
 echo "🎉 Zapret2 v7.0 已成功启动！"
