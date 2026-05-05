@@ -22,44 +22,33 @@ LimitNOFILE=65535
 LimitNPROC=4096
 
 # ================================
-# 安全沙箱（优化后）
+# 安全沙箱（修复版）
 # ================================
 
-# 允许 zapret2d 访问自身目录（否则 226）
 ProtectSystem=full
-ReadWritePaths=/root/catmi/Zapret2
-ReadWritePaths=/var/log/zapret2
-
-# 允许访问 root 目录（否则无法读取配置）
 ProtectHome=read-only
-InaccessiblePaths=/home
-InaccessiblePaths=/srv
-
-# 允许访问 /tmp（nfqws2 需要）
 PrivateTmp=no
-
-# 允许访问 tun、netlink、proc
-PrivateDevices=no
+PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 
-# IPC 不能隔离，否则 NFQUEUE 失败
 PrivateIPC=no
-
-# 允许提权（否则 CAP_NET_ADMIN 无效）
 NoNewPrivileges=no
 
-# 网络族限制（保持安全）
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
 
-# 系统调用过滤（保留 NFQUEUE 所需）
 SystemCallFilter=@system-service
 SystemCallFilter=~@mount @reboot
 
-# 能力（NFQUEUE + iptables 必须）
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+ReadWritePaths=/root/catmi/Zapret2
+ReadWritePaths=/var/log/zapret2
+
+InaccessiblePaths=/home
+InaccessiblePaths=/srv
 
 DevicePolicy=closed
 
