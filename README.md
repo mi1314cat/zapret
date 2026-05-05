@@ -14,7 +14,7 @@
 bash <(curl -Ls https://github.com/mi1314cat/zapret/raw/refs/heads/main/zapret.sh)
 ```
 
-markdown
+
 # Zapret2 v7.0
 高性能、可视化、模块化的 DPI 绕过工具集。  
 支持 Local / Gateway 模式，支持自动防火墙、自动白名单、自动 hostlist/iplist、节点管理、策略管理等功能。
