@@ -59,6 +59,8 @@ main_menu() {
         echo -e "${CYAN}18)${RESET} 白名单管理（Zapret2 不处理）"
         echo -e "${CYAN}19)${RESET} 黑名单管理（强制进入 Zapret2）"
         echo -e "${CYAN}20)${RESET} 卸载 Zapret2（删除所有文件）"
+        echo -e "${CYAN}21)${RESET} 自动生成白名单（节点 + 本地地址）"
+
         echo -e "${CYAN}0)${RESET} 退出"
         echo ""
 
@@ -85,6 +87,8 @@ main_menu() {
             18) bash "$MENU/whitelist.sh" ;;
             19) bash "$MENU/blacklist.sh" ;;
             20) bash "$MENU/delete.sh" ;;
+            21) bash "$MENU/auto_whitelist.sh" ;;
+
             0) exit 0 ;;
             *)
                 err "无效选择"
