@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
 # 自动把节点 + 本地地址加入白名单
 
+#!/usr/bin/env bash
+
+# 1. 先处理静默模式
+SILENT=0
+[[ "${1:-}" == "--silent" ]] && SILENT=1
+
+# 2. 再加载路径、颜色等
 BASE="/root/catmi/Zapret2"
 CFG="$BASE/config"
 MENU="$BASE/Menu_options"
 source "$MENU/colors.sh"
+
+WL_FILE="$CFG/whitelist.txt"
+NODES_DIR="$CFG/nodes"
+
+# 3. 再输出标题（如果不是静默模式）
+[[ $SILENT -eq 0 ]] && title "自动生成白名单（节点 + 本地地址）"
+
 
 WL_FILE="$CFG/whitelist.txt"
 NODES_DIR="$CFG/nodes"
