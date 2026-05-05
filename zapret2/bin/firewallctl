@@ -18,6 +18,9 @@ IPT_MOD="$LIB_DIR/firewall_iptables.sh"
 # ============================================================
 # 自动检测防火墙后端
 # ============================================================
+WL_FILE="$CFG_DIR/whitelist.txt"
+BL_FILE="$CFG_DIR/blacklist.txt"
+
 detect_backend() {
     # 用户强制指定
     if [[ -f "$CFG_DIR/backend.conf" ]]; then
