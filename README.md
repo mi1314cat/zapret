@@ -30,7 +30,7 @@ bash <(curl -Ls https://github.com/mi1314cat/zapret/raw/refs/heads/main/zapret.s
 
 ```
 zapret2/
- ├── zapret2.sh                # 主菜单（小白入口）
+ ├── zapret2.sh                # 主菜单
  ├── Menu_options/             # 所有功能模块
  │     ├── install.sh
  │     ├── service.sh
