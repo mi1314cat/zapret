@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - firewall_iptables.sh (Optimized)
-# 无重复挂载 + 无链污染 + 防止 zapret2d 自杀
+# Zapret2 v7.0 - firewall_iptables.sh (Optimized + 白/黑名单)
 # ============================================================
 
 set -euo pipefail
@@ -11,6 +10,9 @@ source "$SCRIPT_DIR/utils.sh"
 
 ZAPRET2_CFG="/root/catmi/Zapret2/config"
 QUEUE_NUM=200
+
+WL_FILE="$ZAPRET2_CFG/whitelist.txt"
+BL_FILE="$ZAPRET2_CFG/blacklist.txt"
 
 # ============================================================
 # 读取端口配置
@@ -82,6 +84,36 @@ delete_chain_if_exists() {
 }
 
 # ============================================================
+# 在链中添加白名单规则（RETURN）
+# ============================================================
+add_whitelist_rules_ipt() {
+    local cmd="$1"
+    local chain="$2"
+
+    [[ -f "$WL_FILE" ]] || return 0
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        $cmd -t mangle -A "$chain" -d "$line" -j RETURN 2>/dev/null || true
+    done < "$WL_FILE"
+}
+
+# ============================================================
+# 在链中添加黑名单规则（NFQUEUE）
+# ============================================================
+add_blacklist_rules_ipt() {
+    local cmd="$1"
+    local chain="$2"
+
+    [[ -f "$BL_FILE" ]] || return 0
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        $cmd -t mangle -A "$chain" -d "$line" -j NFQUEUE --queue-num "$QUEUE_NUM" --queue-bypass 2>/dev/null || true
+    done < "$BL_FILE"
+}
+
+# ============================================================
 # 创建热交换链（NEW → swap → delete old）
 # ============================================================
 swap_chain() {
@@ -122,6 +154,13 @@ swap_chain() {
             $cmd -t mangle -A "$new" -d "$net" -j RETURN
         done
 
+        # 白名单（Zapret2 不处理）
+        add_whitelist_rules_ipt "$cmd" "$new"
+
+        # 黑名单（强制进入 NFQUEUE）
+        add_blacklist_rules_ipt "$cmd" "$new"
+
+        # 默认端口 NFQUEUE
         [[ -n "${TCP4_PORTS:-}" ]] && \
             $cmd -t mangle -A "$new" -p tcp -m multiport --dports "$TCP4_PORTS" -j NFQUEUE --queue-num "$QUEUE_NUM" --queue-bypass
 
@@ -132,6 +171,12 @@ swap_chain() {
         for net in "${SAFE_V6[@]}"; do
             $cmd -t mangle -A "$new" -d "$net" -j RETURN
         done
+
+        # 白名单（Zapret2 不处理）
+        add_whitelist_rules_ipt "$cmd" "$new"
+
+        # 黑名单（强制进入 NFQUEUE）
+        add_blacklist_rules_ipt "$cmd" "$new"
 
         [[ -n "${TCP6_PORTS:-}" ]] && \
             $cmd -t mangle -A "$new" -p tcp -m multiport --dports "$TCP6_PORTS" -j NFQUEUE --queue-num "$QUEUE_NUM" --queue-bypass
