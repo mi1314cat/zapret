@@ -133,7 +133,7 @@ EOF
     exit 1
   fi
 
-  ok "Zapret2 v5.4 安装完成且验证成功！"
+  ok "Zapret2 安装完成且验证成功！"
 }
 
 generate_run_script() {
