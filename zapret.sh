@@ -74,6 +74,8 @@ chmod +x /usr/local/bin/catmiz
 
 echo "✔ catmiz 快捷方式 OK"
 
+rm -rf /root/catmi/zapret
+
 echo ""
 echo "============================================================"
 echo "🎉 Zapret2 v7.0 安装完成！"
