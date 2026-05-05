@@ -1,44 +1,121 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - 小白引导式菜单（模块化终极版）
-# 所有复杂功能均拆分到 Menu_options/*.sh
+# Zapret2 v7.0 - 主菜单（完整版 1–21）
 # ============================================================
 
 set -euo pipefail
 
 BASE="/root/catmi/Zapret2"
+BIN="$BASE/bin"
+LIB="$BASE/lib"
+CFG="$BASE/config"
 MENU="$BASE/Menu_options"
 
-# 加载颜色模块
-source "$MENU/colors.sh"
+source "$LIB/utils.sh"
 
 SERVICE="zapret2"
-CFG="$BASE/config"
 
-pause() {
-    echo ""
-    read -rp "按回车继续..."
+run_menu_script() {
+    local script="$1"
+    if [[ -x "$MENU/$script" ]]; then
+        bash "$MENU/$script"
+    else
+        log_warn "菜单脚本不存在或不可执行：$MENU/$script"
+        read -rp "按回车返回..."
+    fi
 }
 
-# ================================
-# 主菜单
-# ================================
+one_key_install() {
+    if [[ -x "$BASE/bootstrap.sh" ]]; then
+        bash "$BASE/bootstrap.sh"
+    else
+        log_warn "未找到 bootstrap.sh，一键安装不可用"
+        read -rp "按回车返回..."
+    fi
+}
+
+view_status() {
+    systemctl status "$SERVICE" --no-pager
+    echo ""
+    read -rp "按回车返回..."
+}
+
+start_zapret2() {
+    log_info "启动 Zapret2..."
+    systemctl start "$SERVICE"
+    view_status
+}
+
+stop_zapret2() {
+    log_warn "停止 Zapret2..."
+    systemctl stop "$SERVICE"
+    view_status
+}
+
+restart_zapret2() {
+    log_info "重启 Zapret2..."
+    systemctl restart "$SERVICE"
+    view_status
+}
+
+tail_logs() {
+    journalctl -u "$SERVICE" -f --no-pager
+}
+
+toggle_mode() {
+    local mode_file="$CFG/mode.conf"
+    local cur="local"
+
+    [[ -f "$mode_file" ]] && cur="$(cat "$mode_file")"
+
+    if [[ "$cur" == "local" ]]; then
+        echo "gateway" > "$mode_file"
+        log_info "已切换为 Gateway 模式"
+    else
+        echo "local" > "$mode_file"
+        log_info "已切换为 Local 模式"
+    fi
+
+    echo "当前模式：$(cat "$mode_file")"
+    read -rp "按回车返回..."
+}
+
+firewall_menu() {
+    clear
+    echo -e "${CYAN}=== 防火墙管理 ===${RESET}"
+    echo "1) 加载规则"
+    echo "2) 清理规则"
+    echo "3) 查看规则"
+    echo "0) 返回"
+    read -rp "选择: " opt
+
+    case "$opt" in
+        1) bash "$BIN/firewallctl" apply ;;
+        2) bash "$BIN/firewallctl" clear ;;
+        3) bash "$BIN/firewallctl" status ;;
+    esac
+
+    echo ""
+    read -rp "按回车返回..."
+}
+
+health_check_menu() {
+    if [[ -x "$MENU/health.sh" ]]; then
+        bash "$MENU/health.sh"
+    else
+        bash "$BIN/healthcheck"
+        echo ""
+        read -rp "按回车返回..."
+    fi
+}
+
 main_menu() {
     while true; do
         clear
-        title "Zapret2 v7.0 小白引导菜单（模块化版）"
-
-        # 服务状态
-        if systemctl is-active --quiet "$SERVICE"; then
-            status="${GREEN}运行中${RESET}"
-        else
-            status="${RED}未运行${RESET}"
-        fi
-
-        echo -e "服务状态：$status"
-        echo -e "当前模式：${YELLOW}$(cat "$CFG/mode.conf")${RESET}"
+        echo -e "${GREEN}=========================================${RESET}"
+        echo -e "${CYAN}        Zapret2 v7.0 控制面板${RESET}"
+        echo -e "${GREEN}=========================================${RESET}"
         echo ""
-
         echo -e "${CYAN}1)${RESET} 一键安装"
         echo -e "${CYAN}2)${RESET} 查看运行状态"
         echo -e "${CYAN}3)${RESET} 启动 Zapret2"
@@ -60,40 +137,35 @@ main_menu() {
         echo -e "${CYAN}19)${RESET} 黑名单管理（强制进入 Zapret2）"
         echo -e "${CYAN}20)${RESET} 卸载 Zapret2（删除所有文件）"
         echo -e "${CYAN}21)${RESET} 自动生成白名单（节点 + 本地地址）"
-
+        echo ""
         echo -e "${CYAN}0)${RESET} 退出"
         echo ""
+        read -rp "选择: " opt
 
-        read -rp "请输入数字：" choice
-
-        case "$choice" in
-            1) bash "$MENU/install.sh" ;;
-            2) systemctl status "$SERVICE"; pause ;;
-            3) bash "$MENU/service.sh" start ;;
-            4) bash "$MENU/service.sh" stop ;;
-            5) bash "$MENU/service.sh" restart ;;
-            6) bash "$MENU/service.sh" logs ;;
-            7) bash "$MENU/service.sh" mode ;;
-            8) bash "$MENU/strategy.sh" ;;
-            9) nano "$CFG/ports.conf"; pause ;;
-            10) bash "$MENU/nodes.sh" ;;
-            11) bash "$MENU/firewall.sh" ;;
-            12) bash "$MENU/health.sh" ;;
-            13) bash "$BASE/zapret2.sh" fix; pause ;;
-            14) bash "$MENU/hostlist.sh" ;;
-            15) bash "$MENU/blockcheck.sh" ;;
-            16) bash "$MENU/packet.sh" ;;
-            17) bash "$MENU/pidfix.sh" ;;
-            18) bash "$MENU/whitelist.sh" ;;
-            19) bash "$MENU/blacklist.sh" ;;
-            20) bash "$MENU/delete.sh" ;;
-            21) bash "$MENU/auto_whitelist.sh" ;;
-
+        case "$opt" in
+            1) one_key_install ;;
+            2) view_status ;;
+            3) start_zapret2 ;;
+            4) stop_zapret2 ;;
+            5) restart_zapret2 ;;
+            6) tail_logs ;;
+            7) toggle_mode ;;
+            8) run_menu_script "strategy.sh" ;;
+            9) run_menu_script "port.sh" ;;
+            10) run_menu_script "nodes.sh" ;;
+            11) firewall_menu ;;
+            12) health_check_menu ;;
+            13) run_menu_script "fix.sh" ;;
+            14) run_menu_script "hostlist.sh" ;;
+            15) run_menu_script "blockcheck.sh" ;;
+            16) run_menu_script "qnum.sh" ;;
+            17) run_menu_script "pidfix.sh" ;;
+            18) run_menu_script "whitelist.sh" ;;
+            19) run_menu_script "blacklist.sh" ;;
+            20) run_menu_script "uninstall.sh" ;;
+            21) run_menu_script "autowhitelist.sh" ;;
             0) exit 0 ;;
-            *)
-                err "无效选择"
-                pause
-                ;;
+            *) log_warn "无效选择" ; sleep 1 ;;
         esac
     done
 }
