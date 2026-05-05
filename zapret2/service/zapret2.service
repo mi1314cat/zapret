@@ -15,16 +15,16 @@ ExecStop=/bin/kill -TERM $MAINPID
 Restart=always
 RestartSec=2
 
-WatchdogSec=10
-NotifyAccess=all
+# ❌ zapret2d 不支持 systemd-notify，必须关闭
+WatchdogSec=0
+NotifyAccess=none
 
 LimitNOFILE=65535
 LimitNPROC=4096
 
 # ================================
-# 安全沙箱（修复版）
+# 安全沙箱（兼容 zapret2d）
 # ================================
-
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=no
