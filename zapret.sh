@@ -173,10 +173,10 @@ EOF
     chmod +x "$BUILD_SCRIPT"
 
     if ! bash "$BUILD_SCRIPT"; then
-        echo "❌ nfqws2 编译失败，自动回退到 zapret 作者原版脚本"
-        bash <(curl -H "Cache-Control: no-cache" -Ls https://raw.githubusercontent.com/bol-van/zapret/master/install_easy.sh)
-        exit 0
-    fi
+    echo "❌ nfqws2 编译失败，请手动检查 /tmp/zapret2_build/nfq2 下的编译日志"
+    exit 1
+fi
+
 else
     echo "✔ nfqws2 已存在，跳过编译"
 fi
