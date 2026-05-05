@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - firewallctl（最终优化版）
-# 支持：白名单 / 黑名单 / 默认规则
+# Zapret2 v7.0 - firewallctl（增强版）
+# 白名单 / 黑名单 / hostlist / iplist / qnum / IPv4+IPv6
 # ============================================================
 
 set -euo pipefail
@@ -15,13 +15,15 @@ source "$LIB/utils.sh"
 BACKEND="nft"
 TABLE="zapret2"
 CHAIN="zapret2_chain"
-QUEUE_NUM=100
 
 WHITELIST="$CFG/whitelist.txt"
 BLACKLIST="$CFG/blacklist.txt"
+HOSTLIST="$CFG/hostlist.txt"
+IPLIST="$CFG/iplist.txt"
+QCONF="$CFG/qnum.conf"
 
 # ============================================================
-# 读取模式
+# 读取模式 / qnum / qsize
 # ============================================================
 get_mode() {
     if [[ -f "$CFG/mode.conf" ]]; then
@@ -29,6 +31,14 @@ get_mode() {
     else
         echo "local"
     fi
+}
+
+get_qnum() {
+    grep -E '^qnum=' "$QCONF" 2>/dev/null | cut -d= -f2 || echo "100"
+}
+
+get_qsize() {
+    grep -E '^qsize=' "$QCONF" 2>/dev/null | cut -d= -f2 || echo "4096"
 }
 
 # ============================================================
@@ -39,79 +49,146 @@ nft_clear() {
 }
 
 # ============================================================
-# 加载白名单
+# 自身保护（防自杀）
+# ============================================================
+apply_self_protection() {
+    log_info "[FW] 排除 zapret2 自身流量"
+
+    # 回环
+    nft add rule inet "$TABLE" "$CHAIN" ip saddr 127.0.0.1 counter accept
+    nft add rule inet "$TABLE" "$CHAIN" ip daddr 127.0.0.1 counter accept
+    nft add rule inet "$TABLE" "$CHAIN" ip6 saddr ::1 counter accept
+    nft add rule inet "$TABLE" "$CHAIN" ip6 daddr ::1 counter accept
+
+    # 本机地址（避免自吃）
+    ip -4 addr show scope global | awk '/inet /{print $2}' | while read -r cidr; do
+        addr=${cidr%/*}
+        nft add rule inet "$TABLE" "$CHAIN" ip saddr "$addr" counter accept
+        nft add rule inet "$TABLE" "$CHAIN" ip daddr "$addr" counter accept
+    done
+
+    ip -6 addr show scope global | awk '/inet6 /{print $2}' | while read -r cidr; do
+        addr=${cidr%/*}
+        nft add rule inet "$TABLE" "$CHAIN" ip6 saddr "$addr" counter accept
+        nft add rule inet "$TABLE" "$CHAIN" ip6 daddr "$addr" counter accept
+    done
+}
+
+# ============================================================
+# 白名单（IP 段 / IP）
 # ============================================================
 apply_whitelist() {
     [[ ! -f "$WHITELIST" ]] && return 0
 
     while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        [[ "$line" =~ ^# ]] && continue
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
 
-        echo "[FW] 白名单：跳过 $line"
-        nft add rule inet "$TABLE" "$CHAIN" ip daddr "$line" counter accept
-        nft add rule inet "$TABLE" "$CHAIN" ip saddr "$line" counter accept
+        log_info "[FW] 白名单：$line"
+
+        if [[ "$line" == *:* ]]; then
+            nft add rule inet "$TABLE" "$CHAIN" ip6 daddr "$line" counter accept
+            nft add rule inet "$TABLE" "$CHAIN" ip6 saddr "$line" counter accept
+        else
+            nft add rule inet "$TABLE" "$CHAIN" ip daddr "$line" counter accept
+            nft add rule inet "$TABLE" "$CHAIN" ip saddr "$line" counter accept
+        fi
     done < "$WHITELIST"
 }
 
 # ============================================================
-# 加载黑名单
+# 黑名单（IP 段 / IP）
 # ============================================================
 apply_blacklist() {
     [[ ! -f "$BLACKLIST" ]] && return 0
 
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        [[ "$line" =~ ^# ]] && continue
+    local qnum
+    qnum="$(get_qnum)"
 
-        echo "[FW] 黑名单：强制处理 $line"
-        nft add rule inet "$TABLE" "$CHAIN" ip daddr "$line" counter queue num "$QUEUE_NUM"
-        nft add rule inet "$TABLE" "$CHAIN" ip saddr "$line" counter queue num "$QUEUE_NUM"
+    while IFS= read -r line; do
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+
+        log_info "[FW] 黑名单：$line"
+
+        if [[ "$line" == *:* ]]; then
+            nft add rule inet "$TABLE" "$CHAIN" ip6 daddr "$line" counter queue num "$qnum"
+            nft add rule inet "$TABLE" "$CHAIN" ip6 saddr "$line" counter queue num "$qnum"
+        else
+            nft add rule inet "$TABLE" "$CHAIN" ip daddr "$line" counter queue num "$qnum"
+            nft add rule inet "$TABLE" "$CHAIN" ip saddr "$line" counter queue num "$qnum"
+        fi
     done < "$BLACKLIST"
 }
 
 # ============================================================
-# 默认规则
+# hostlist（域名 → set）
 # ============================================================
-apply_default_rules() {
-    local mode
-    mode="$(get_mode)"
+apply_hostlist() {
+    [[ ! -f "$HOSTLIST" ]] && return 0
 
-    echo "[FW] 默认规则（mode=$mode）"
+    log_info "[FW] 加载 hostlist（域名）"
 
-    case "$mode" in
-        local)
-            nft add rule inet "$TABLE" "$CHAIN" meta l4proto tcp counter queue num "$QUEUE_NUM"
-            ;;
-        gateway)
-            nft add rule inet "$TABLE" "$CHAIN" meta l4proto tcp counter queue num "$QUEUE_NUM"
-            ;;
-        *)
-            echo "[FW] 未知模式：$mode，按 local 处理"
-            nft add rule inet "$TABLE" "$CHAIN" meta l4proto tcp counter queue num "$QUEUE_NUM"
-            ;;
-    esac
+    nft add set inet "$TABLE" hostlist '{ type inet_service; flags interval; }' 2>/dev/null || true
+
+    while IFS= read -r host; do
+        [[ -z "$host" || "$host" =~ ^# ]] && continue
+        # 这里只是占位，真正基于 SNI/HTTP Host 的匹配在 nfqws2 里做
+        # 这里保留 set 以便后续扩展
+        :
+    done < "$HOSTLIST"
 }
 
 # ============================================================
-# 排除 zapret2 自身流量（防自杀）
+# iplist（IP → set）
 # ============================================================
-apply_self_protection() {
-    echo "[FW] 排除 zapret2 自身流量"
+apply_iplist() {
+    [[ ! -f "$IPLIST" ]] && return 0
 
-    # 排除 zapret2d / nfqws2 自身
-    nft add rule inet "$TABLE" "$CHAIN" meta skuid 0 counter accept
-    nft add rule inet "$TABLE" "$CHAIN" meta skgid 0 counter accept
+    log_info "[FW] 加载 iplist（IP）"
 
-    # 排除本机回环
-    nft add rule inet "$TABLE" "$CHAIN" ip saddr 127.0.0.1 counter accept
-    nft add rule inet "$TABLE" "$CHAIN" ip daddr 127.0.0.1 counter accept
+    nft add set inet "$TABLE" iplist '{ type ipv4_addr; flags interval; }' 2>/dev/null || true
+
+    while IFS= read -r ip; do
+        [[ -z "$ip" || "$ip" =~ ^# ]] && continue
+        nft add element inet "$TABLE" iplist { "$ip" } 2>/dev/null || true
+    done < "$IPLIST"
+}
+
+# ============================================================
+# 默认规则（local / gateway）
+# ============================================================
+apply_default_rules() {
+    local mode qnum qsize
+    mode="$(get_mode)"
+    qnum="$(get_qnum)"
+    qsize="$(get_qsize)"
+
+    log_info "[FW] 默认规则（mode=$mode, qnum=$qnum, qsize=$qsize）"
+
+    # 设置 NFQUEUE 队列大小（全局）
+    sysctl -w net.netfilter.nf_queue_maxlen="$qsize" >/dev/null 2>&1 || true
+
+    case "$mode" in
+        local)
+            # 本机出站流量
+            nft add rule inet "$TABLE" "$CHAIN" meta l4proto tcp counter queue num "$qnum"
+            ;;
+        gateway)
+            # 网关模式：转发 + 入站
+            nft add rule inet "$TABLE" "$CHAIN" meta l4proto tcp counter queue num "$qnum"
+            ;;
+        *)
+            log_warn "[FW] 未知模式：$mode，按 local 处理"
+            nft add rule inet "$TABLE" "$CHAIN" meta l4proto tcp counter queue num "$qnum"
+            ;;
+    esac
 }
 
 # ============================================================
 # 加载 nft 规则
 # ============================================================
 nft_apply() {
+    log_info "[FW] 使用 nft 后端（mode=$(get_mode)）"
+
     nft_clear
 
     nft add table inet "$TABLE"
@@ -120,9 +197,11 @@ nft_apply() {
     apply_self_protection
     apply_whitelist
     apply_blacklist
+    apply_hostlist
+    apply_iplist
     apply_default_rules
 
-    echo "[FW] nftables 规则加载完成"
+    ok "[FW] nftables 规则加载完成"
 }
 
 # ============================================================
@@ -132,7 +211,7 @@ nft_status() {
     if nft list table inet "$TABLE" >/dev/null 2>&1; then
         nft list table inet "$TABLE"
     else
-        echo "[FW] 表不存在：$TABLE"
+        log_warn "[FW] 表不存在：$TABLE"
     fi
 }
 
@@ -141,11 +220,10 @@ nft_status() {
 # ============================================================
 case "${1:-}" in
     apply)
-        echo "[FW] 使用 nft 后端（mode=$(get_mode)）"
         nft_apply
         ;;
     clear)
-        echo "[FW] 清理 nft 规则..."
+        log_info "[FW] 清理 nft 规则..."
         nft_clear
         ;;
     status)
