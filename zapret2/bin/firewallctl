@@ -34,19 +34,22 @@ detect_backend() {
 }
 
 apply_rules() {
+    local mode
+    mode=$(cat "$CFG/mode.conf" 2>/dev/null || echo local)
+
     local backend
     backend=$(detect_backend)
 
-    log_info "使用防火墙后端：$backend"
+    log_info "使用防火墙后端：$backend（mode=$mode）"
 
     case "$backend" in
         nft)
             source "$NFT_MOD"
-            apply_nft_rules
+            apply_nft_rules "$mode"
             ;;
         iptables|iptables-legacy)
             source "$IPT_MOD"
-            apply_iptables_rules
+            apply_iptables_rules "$mode"
             ;;
     esac
 }
