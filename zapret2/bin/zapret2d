@@ -18,10 +18,12 @@ LOCK_FILE="/run/zapret2d.lock"
 mkdir -p "$LOG_DIR"
 
 source "$LIB/utils.sh"
-source "$LIB/zapret2_core.sh"
+source "$BASE/zapret2_core.sh"
 
 FIREWALLCTL="$BIN/firewallctl"
 HEALTHCHECK="$BIN/healthcheck"
+
+require_root
 
 # ============================================================
 # 单实例锁（PID + flock）
@@ -30,14 +32,15 @@ acquire_lock() {
     exec 9>"$LOCK_FILE"
 
     if ! flock -n 9; then
-        echo "[FATAL] 另一个 zapret2d 实例正在运行（flock 锁）"
+        err "另一个 zapret2d 实例正在运行（flock 锁）"
         exit 1
     fi
 
     if [[ -f "$PID_FILE" ]]; then
+        local old_pid
         old_pid=$(cat "$PID_FILE" || true)
         if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-            echo "[FATAL] 另一个 zapret2d 实例正在运行（PID 锁）"
+            err "另一个 zapret2d 实例正在运行（PID 锁）"
             exit 1
         fi
     fi
@@ -46,6 +49,7 @@ acquire_lock() {
 }
 
 cleanup() {
+    warn "清理 zapret2d 运行环境..."
     rm -f "$PID_FILE"
     killall -9 nfqws2 2>/dev/null || true
     "$FIREWALLCTL" clear || true
@@ -56,7 +60,7 @@ trap cleanup EXIT
 # 防火墙加载
 # ============================================================
 load_firewall() {
-    echo "[INFO] 加载防火墙规则..."
+    info "[FW] 加载防火墙规则..."
     "$FIREWALLCTL" apply
 }
 
@@ -68,33 +72,25 @@ health_loop() {
         sleep 5
 
         if ! "$HEALTHCHECK" >/dev/null 2>&1; then
-            echo "[WARN] 健康检查失败，正在重启 nfqws2..."
+            warn "[HEALTH] 健康检查失败，正在重启 nfqws2..."
             killall -9 nfqws2 2>/dev/null || true
             sleep 1
-            # 这里假设 zapret2_core_main 只负责 nfqws2，不再做锁之类的事
-            zapret2_core_main &
+            zapret2_core_main || err "重启 nfqws2 失败"
         fi
     done
 }
 
-# ============================================================
-# 主入口
-# ============================================================
 main() {
-    require_root
     acquire_lock
 
-    exec > >(tee -a "$LOG_FILE") 2>&1
-
-    echo "========== $(date) - zapret2d 启动 =========="
-
+    ok "Zapret2 v7.0 守护进程启动"
     load_firewall
 
-    # 启动 nfqws2
-    zapret2_core_main &
+    info "[CORE] 启动 nfqws2..."
+    zapret2_core_main
 
-    # 健康循环
+    info "[HEALTH] 启动健康检查循环..."
     health_loop
 }
 
-main
+main "$@" 2>&1 | tee -a "$LOG_FILE"
