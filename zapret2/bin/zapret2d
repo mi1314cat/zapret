@@ -18,7 +18,7 @@ LOCK_FILE="/run/zapret2d.lock"
 mkdir -p "$LOG_DIR"
 
 source "$LIB/utils.sh"
-source "$BASE/zapret2_core.sh"
+source "$LIB/zapret2_core.sh"
 
 FIREWALLCTL="$BIN/firewallctl"
 HEALTHCHECK="$BIN/healthcheck"
