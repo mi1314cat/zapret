@@ -1,80 +1,57 @@
 #!/usr/bin/env bash
 # ============================================================
-# Zapret2 v7.0 - 核心参数构建器 + nfqws2 启动器
-# 只负责：读取配置 → 生成参数 → 启动 nfqws2
-# 不负责：锁、防火墙、守护、健康循环
+# Zapret2 v7.0 - 核心调度逻辑（只负责 nfqws2）
 # ============================================================
 
 set -euo pipefail
 
 BASE="/root/catmi/Zapret2"
 BIN="$BASE/bin"
+LIB="$BASE/lib"
 CFG="$BASE/config"
 
-NFQWS_BIN="$BIN/nfqws2"
+source "$LIB/utils.sh"
+source "$LIB/config.sh"
+source "$LIB/qnum.sh"
+source "$LIB/strategy.sh"
+source "$LIB/nodes.sh"
 
-# ============================================================
-# 读取模式 / 配置
-# ============================================================
-get_mode() {
-    if [[ -f "$CFG/mode.conf" ]]; then
-        cat "$CFG/mode.conf"
-    else
-        echo "local"
+NFQWS2_BIN="$BIN/nfqws2"
+
+zapret2_core_build_args() {
+    local mode ports qnum qsize node_args extra_args
+
+    mode=$(get_mode)              # 来自 config.sh / mode.conf
+    read_ports ports              # 来自 config.sh / ports.conf
+    read_qnum qnum qsize          # 来自 qnum.sh / qnum.conf
+    node_args=$(build_node_args)  # 来自 nodes.sh
+    extra_args=$(build_strategy_args "$mode")  # 来自 strategy.sh
+
+    # 这里你可以按你自己的 nfqws2 参数风格调整
+    NFQWS2_ARGS=(
+        --qnum "$qnum"
+        --qsize "$qsize"
+        --port "$ports"
+    )
+
+    if [[ -n "$node_args" ]]; then
+        NFQWS2_ARGS+=($node_args)
+    fi
+    if [[ -n "$extra_args" ]]; then
+        NFQWS2_ARGS+=($extra_args)
     fi
 }
 
-# 这里可以根据你的实际配置结构调整
-build_nfqws_args() {
-    local mode
-    mode="$(get_mode)"
-
-    # 基础参数
-    local args=()
-
-    # 示例：根据模式切换不同参数
-    case "$mode" in
-        local)
-            args+=(
-                "--queue-num" "100"
-                "--bind-addr" "127.0.0.1"
-            )
-            ;;
-        gateway)
-            args+=(
-                "--queue-num" "100"
-                "--bind-addr" "0.0.0.0"
-            )
-            ;;
-        *)
-            echo "[WARN] 未知模式：$mode，使用 local"
-            args+=(
-                "--queue-num" "100"
-                "--bind-addr" "127.0.0.1"
-            )
-            ;;
-    esac
-
-    # TODO: 如果你有更多配置（节点、策略等），可以在这里继续拼接 args
-
-    printf '%s\n' "${args[@]}"
-}
-
-# ============================================================
-# 启动 nfqws2（单次）
-# ============================================================
-zapret2_core_start_nfqws2() {
-    local args
-    mapfile -t args < <(build_nfqws_args)
-
-    echo "[INFO] 启动 nfqws2..."
-    exec "$NFQWS_BIN" "${args[@]}"
-}
-
-# ============================================================
-# 兼容旧入口：zapret2_core_main
-# zapret2d 里用的是：zapret2_core_main &
-# ============================================================
 zapret2_core_main() {
-    zapret2_core_start_nfqws2
+    require_root
+
+    if [[ ! -x "$NFQWS2_BIN" ]]; then
+        err "未找到 nfqws2：$NFQWS2_BIN"
+        return 1
+    fi
+
+    zapret2_core_build_args
+
+    info "[CORE] 启动 nfqws2：$NFQWS2_BIN ${NFQWS2_ARGS[*]}"
+    "$NFQWS2_BIN" "${NFQWS2_ARGS[@]}" &
 }
